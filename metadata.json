@@ -1,0 +1,8 @@
+{
+  "name": "Essential Oils Wholesale Manager",
+  "description": "A comprehensive system for managing sales, invoices, commissions, and customer remarketing for an essential oils wholesale business, featuring AI-powered customer classification and marketing tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
