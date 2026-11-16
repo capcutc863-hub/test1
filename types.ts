@@ -1,5 +1,5 @@
 
-export type OrderStatus = 'قيد التنفيذ' | 'تم التسليم' | 'مرتجع' | 'ملغي';
+export type OrderStatus = 'قيد التنفيذ' | 'تم التجهيز' | 'تم الشحن' | 'تم التسليم' | 'مرتجع' | 'ملغي';
 export type UserRole = 'admin' | 'supervisor' | 'sales';
 export type OilGrade = 'عالي (Code A)' | 'وسط (Code B)' | 'تجاري (Code C)';
 
@@ -21,6 +21,7 @@ export interface User {
   isMuted: boolean;
   canEditInventory: boolean;
   canConfirmDelivery: boolean; // صلاحية تأكيد التسليم
+  canManageOrderStatus?: boolean; // صلاحية التجهيز والشحن والموافقة على طلبات التعديل
   canDeleteOrders?: boolean; // صلاحية حذف الفواتير
   canDeleteCustomers?: boolean; // صلاحية حذف العملاء
   address?: string;
@@ -71,6 +72,28 @@ export interface OrderItem {
   grade: OilGrade;
   quantity: number;
   price: number;
+  isCustom?: boolean;
+  addToInventory?: boolean;
+}
+
+export interface OrderEditRequest {
+  requestedById: string;
+  requestedByName: string;
+  requestedAt: string;
+  reason?: string;
+  customerName: string;
+  customerPhone: string;
+  customerAddress: string;
+  customerNotes?: string;
+  salesRepId: string;
+  salesRepName: string;
+  items: OrderItem[];
+  subtotal: number;
+  discountPercentage: number;
+  discountAmount: number;
+  shippingCost: number;
+  totalAmount: number;
+  commission: number;
 }
 
 export interface Order {
@@ -90,4 +113,5 @@ export interface Order {
   status: OrderStatus;
   createdAt: string;
   commission: number;
+  pendingEditRequest?: OrderEditRequest | null;
 }

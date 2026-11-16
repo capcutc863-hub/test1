@@ -61,17 +61,17 @@ export const InventoryTab: React.FC<InventoryTabProps> = ({
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
+    <div className="space-y-4 sm:space-y-6 animate-in fade-in duration-300">
       {/* Top Filter and Actions */}
-      <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
+      <div className="bg-white p-4 sm:p-6 rounded-3xl sm:rounded-[2.5rem] shadow-sm border border-slate-200/80 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3.5">
         <div className="flex-1 relative">
-          <Search className="w-5 h-5 text-gray-400 absolute right-4 top-1/2 -translate-y-1/2" />
+          <Search className="w-5 h-5 text-slate-400 absolute right-4 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="بحث في أسماء الزيوت والروائح المركزة..."
-            className="w-full pr-12 pl-4 py-3.5 bg-gray-50 rounded-2xl font-bold outline-none border border-transparent focus:border-emerald-500 text-sm"
+            className="w-full min-h-[48px] pr-12 pl-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200/80 focus:border-[#0A468C] text-base sm:text-sm text-slate-900"
           />
         </div>
 
@@ -81,10 +81,10 @@ export const InventoryTab: React.FC<InventoryTabProps> = ({
             <button
               key={g}
               onClick={() => setGradeFilter(g)}
-              className={`px-4 py-2.5 rounded-xl font-bold text-xs whitespace-nowrap transition-all ${
+              className={`min-h-[40px] px-3.5 py-2 rounded-xl font-bold text-xs whitespace-nowrap transition-all ${
                 gradeFilter === g
-                  ? 'bg-emerald-600 text-white shadow-md'
-                  : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                  ? 'bg-[#0A468C] text-white shadow-sm'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
               {g}
@@ -95,7 +95,7 @@ export const InventoryTab: React.FC<InventoryTabProps> = ({
         {canEdit && (
           <button
             onClick={() => setShowAddModal(true)}
-            className="bg-emerald-600 text-white px-6 py-3.5 rounded-2xl font-black shadow-md hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap"
+            className="min-h-[48px] bg-[#0A468C] text-white px-5 py-3 rounded-2xl font-black shadow-md hover:bg-[#072F5F] transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap active:scale-[0.98]"
           >
             <Plus className="w-4 h-4" />
             إضافة صنف زيت جديد
@@ -104,55 +104,57 @@ export const InventoryTab: React.FC<InventoryTabProps> = ({
       </div>
 
       {/* Products Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
         {filteredProducts.map(product => {
           const isLowStock = product.stock < 5000;
           return (
             <div
               key={product.id}
-              className="bg-white p-7 rounded-[2.5rem] shadow-sm border border-gray-100 hover:border-emerald-200 transition-all hover:shadow-md flex flex-col justify-between"
+              className="bg-white p-5 sm:p-7 rounded-3xl sm:rounded-[2.5rem] shadow-sm border border-slate-200/80 hover:border-blue-200 transition-all hover:shadow-md flex flex-col justify-between"
             >
               <div>
-                <div className="flex justify-between items-start mb-4">
-                  <span className={`px-3 py-1 rounded-full text-xs font-black ${
+                <div className="flex justify-between items-start mb-3.5">
+                  <span className={`px-3 py-1 rounded-xl text-xs font-black ${
                     product.grade.includes('Code A') ? 'bg-amber-100 text-amber-900 border border-amber-200' :
-                    product.grade.includes('Code B') ? 'bg-blue-100 text-blue-900 border border-blue-200' :
-                    'bg-gray-100 text-gray-800'
+                    product.grade.includes('Code B') ? 'bg-blue-100 text-[#072F5F] border border-blue-200' :
+                    'bg-slate-100 text-slate-800'
                   }`}>
                     {product.grade}
                   </span>
-                  <div className="p-3 bg-emerald-50 text-emerald-700 rounded-2xl">
+                  <div className="p-2.5 bg-blue-50 text-[#0A468C] rounded-2xl">
                     <Droplets className="w-5 h-5" />
                   </div>
                 </div>
 
-                <h3 className="text-xl font-black text-gray-900 mb-1">{product.name}</h3>
-                <p className="text-xs text-gray-400 font-bold mb-6">كود النظام: OIL-{product.id}</p>
+                <h3 className="text-lg sm:text-xl font-black text-slate-900 mb-0.5">{product.name}</h3>
+                <p className="text-xs text-slate-500 font-bold mb-4 tabular-nums">كود النظام: OIL-{product.id}</p>
 
-                <div className="grid grid-cols-2 gap-3 mb-6">
-                  <div className="bg-gray-50 p-4 rounded-2xl">
-                    <p className="text-[11px] font-bold text-gray-400">سعر المليجرام (mg)</p>
-                    <p className="text-xl font-black text-emerald-900">{product.pricePerMg} <span className="text-xs">ج.م</span></p>
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/60">
+                    <p className="text-xs font-bold text-slate-500 mb-0.5">سعر الـ mg</p>
+                    <p className="text-lg sm:text-xl font-black text-[#072F5F] tabular-nums">
+                      {product.pricePerMg} <span className="text-xs font-bold">ج.م</span>
+                    </p>
                   </div>
-                  <div className={`p-4 rounded-2xl ${isLowStock ? 'bg-amber-50 border border-amber-200' : 'bg-gray-50'}`}>
-                    <p className="text-[11px] font-bold text-gray-400">المخزون المتاح</p>
-                    <p className={`text-xl font-black ${isLowStock ? 'text-amber-700' : 'text-gray-900'}`}>
-                      {product.stock.toLocaleString()} <span className="text-xs">mg</span>
+                  <div className={`p-3.5 rounded-2xl border ${isLowStock ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200/60'}`}>
+                    <p className="text-xs font-bold text-slate-500 mb-0.5">المخزون المتاح</p>
+                    <p className={`text-lg sm:text-xl font-black tabular-nums ${isLowStock ? 'text-amber-700' : 'text-slate-900'}`}>
+                      {product.stock.toLocaleString()} <span className="text-xs font-bold">mg</span>
                     </p>
                   </div>
                 </div>
 
                 {/* Stock progress */}
-                <div className="space-y-1.5 mb-6">
-                  <div className="flex justify-between text-[11px] font-bold">
-                    <span className="text-gray-400">نسبة التوفر بالمستودع</span>
-                    <span className={isLowStock ? 'text-amber-600' : 'text-emerald-600'}>
-                      {isLowStock ? 'مخزون منخفض' : 'متوفر بشكل ممتاز'}
+                <div className="space-y-1.5 mb-4">
+                  <div className="flex justify-between text-xs font-bold">
+                    <span className="text-slate-500">التوفر بالمستودع</span>
+                    <span className={isLowStock ? 'text-amber-700' : 'text-[#0A468C]'}>
+                      {isLowStock ? 'مخزون منخفض' : 'متوفر بشكل جيد'}
                     </span>
                   </div>
-                  <div className="w-full h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
                     <div
-                      className={`h-full rounded-full ${isLowStock ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                      className={`h-full rounded-full ${isLowStock ? 'bg-amber-500' : 'bg-[#0A468C]'}`}
                       style={{ width: `${Math.min(100, (product.stock / 20000) * 100)}%` }}
                     />
                   </div>
@@ -160,12 +162,12 @@ export const InventoryTab: React.FC<InventoryTabProps> = ({
               </div>
 
               {canEdit && (
-                <div className="pt-4 border-t border-gray-100 flex justify-end">
+                <div className="pt-3 border-t border-slate-100 flex justify-end">
                   <button
                     onClick={() => setEditingProduct(product)}
-                    className="text-xs font-black text-emerald-700 hover:bg-emerald-50 px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5"
+                    className="min-h-[44px] w-full sm:w-auto justify-center text-xs font-black text-[#0A468C] bg-blue-50 hover:bg-[#0A468C] hover:text-white px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5"
                   >
-                    <Edit3 className="w-3.5 h-3.5" />
+                    <Edit3 className="w-4 h-4" />
                     تعديل السعر والمخزون
                   </button>
                 </div>
@@ -175,33 +177,38 @@ export const InventoryTab: React.FC<InventoryTabProps> = ({
         })}
       </div>
 
-      {/* Add Product Modal */}
+      {/* Add Product Modal (Bottom sheet on mobile) */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-[600] font-cairo" dir="rtl">
-          <div className="bg-white w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl space-y-6">
-            <div className="flex justify-between items-center pb-3 border-b">
-              <h3 className="text-xl font-black text-gray-900">إضافة صنف زيت جديد</h3>
-              <button onClick={() => setShowAddModal(false)} className="p-2 hover:bg-gray-100 rounded-xl"><X className="w-5 h-5" /></button>
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-[600] font-cairo" dir="rtl">
+          <div className="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-[2.5rem] p-6 sm:p-8 pb-safe shadow-2xl space-y-5 max-h-[92vh] overflow-y-auto animate-in slide-in-from-bottom sm:zoom-in-95 duration-200">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+              <h3 className="text-lg sm:text-xl font-black text-slate-900">إضافة صنف زيت جديد</h3>
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center hover:bg-slate-100 rounded-xl"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
             <form onSubmit={handleSaveNew} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-1.5">اسم الزيت العطري</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">اسم الزيت العطري</label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="مثال: زيت مسك الطهارة الأبيض..."
-                  className="w-full p-4 bg-gray-50 rounded-2xl font-bold outline-none border focus:border-emerald-500 text-sm"
+                  className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-1.5">درجة النقاوة والجودة</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">درجة النقاوة والجودة</label>
                 <select
                   value={grade}
                   onChange={(e) => setGrade(e.target.value as OilGrade)}
-                  className="w-full p-4 bg-gray-50 rounded-2xl font-bold outline-none border focus:border-emerald-500 text-sm"
+                  className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm"
                 >
                   <option value="عالي (Code A)">عالي النقاوة (Code A) - للماركات الفاخرة</option>
                   <option value="وسط (Code B)">وسط (Code B) - للاستخدام المتوازن</option>
@@ -209,25 +216,27 @@ export const InventoryTab: React.FC<InventoryTabProps> = ({
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3.5">
                 <div>
-                  <label className="block text-xs font-bold text-gray-500 mb-1.5">السعر للـ mg (ج.م)</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">السعر للـ mg (ج.م)</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="0.5"
                     value={pricePerMg}
                     onChange={(e) => setPricePerMg(e.target.value)}
-                    className="w-full p-4 bg-gray-50 rounded-2xl font-bold outline-none border focus:border-emerald-500 text-sm"
+                    className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm tabular-nums"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-500 mb-1.5">الرصيد الابتدائي (mg)</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">الرصيد الابتدائي (mg)</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     value={stock}
                     onChange={(e) => setStock(e.target.value)}
-                    className="w-full p-4 bg-gray-50 rounded-2xl font-bold outline-none border focus:border-emerald-500 text-sm"
+                    className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm tabular-nums"
                     required
                   />
                 </div>
@@ -235,7 +244,7 @@ export const InventoryTab: React.FC<InventoryTabProps> = ({
 
               <button
                 type="submit"
-                className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black text-base hover:bg-emerald-700 transition-all mt-4"
+                className="w-full min-h-[50px] py-3.5 bg-[#0A468C] text-white rounded-2xl font-black text-base hover:bg-[#072F5F] transition-all mt-2"
               >
                 حفظ الصنف في المستودع
               </button>
@@ -244,48 +253,55 @@ export const InventoryTab: React.FC<InventoryTabProps> = ({
         </div>
       )}
 
-      {/* Edit Product Modal */}
+      {/* Edit Product Modal (Bottom sheet on mobile) */}
       {editingProduct && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-[600] font-cairo" dir="rtl">
-          <div className="bg-white w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl space-y-6">
-            <div className="flex justify-between items-center pb-3 border-b">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-[600] font-cairo" dir="rtl">
+          <div className="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-[2.5rem] p-6 sm:p-8 pb-safe shadow-2xl space-y-5 max-h-[92vh] overflow-y-auto animate-in slide-in-from-bottom sm:zoom-in-95 duration-200">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
               <div>
-                <h3 className="text-xl font-black text-gray-900">تعديل {editingProduct.name}</h3>
-                <p className="text-xs font-bold text-emerald-700">{editingProduct.grade}</p>
+                <h3 className="text-lg sm:text-xl font-black text-slate-900">تعديل {editingProduct.name}</h3>
+                <p className="text-xs font-bold text-[#0A468C]">{editingProduct.grade}</p>
               </div>
-              <button onClick={() => setEditingProduct(null)} className="p-2 hover:bg-gray-100 rounded-xl"><X className="w-5 h-5" /></button>
+              <button
+                onClick={() => setEditingProduct(null)}
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center hover:bg-slate-100 rounded-xl"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
             <form onSubmit={handleSaveEdit} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-1.5">اسم الصنف</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">اسم الصنف</label>
                 <input
                   type="text"
                   value={editingProduct.name}
                   onChange={(e) => setEditingProduct({ ...editingProduct, name: e.target.value })}
-                  className="w-full p-4 bg-gray-50 rounded-2xl font-bold outline-none border text-sm"
+                  className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm"
                   required
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3.5">
                 <div>
-                  <label className="block text-xs font-bold text-gray-500 mb-1.5">السعر للـ mg (ج.م)</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">السعر للـ mg (ج.م)</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="0.1"
                     value={editingProduct.pricePerMg}
                     onChange={(e) => setEditingProduct({ ...editingProduct, pricePerMg: parseFloat(e.target.value) || 0 })}
-                    className="w-full p-4 bg-gray-50 rounded-2xl font-bold outline-none border text-sm"
+                    className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm tabular-nums"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-500 mb-1.5">المخزون الحالي (mg)</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">المخزون الحالي (mg)</label>
                   <input
                     type="number"
+                    inputMode="decimal"
                     value={editingProduct.stock}
                     onChange={(e) => setEditingProduct({ ...editingProduct, stock: parseFloat(e.target.value) || 0 })}
-                    className="w-full p-4 bg-gray-50 rounded-2xl font-bold outline-none border text-sm"
+                    className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm tabular-nums"
                     required
                   />
                 </div>
@@ -293,7 +309,7 @@ export const InventoryTab: React.FC<InventoryTabProps> = ({
 
               <button
                 type="submit"
-                className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black text-base hover:bg-emerald-700 transition-all mt-4"
+                className="w-full min-h-[50px] py-3.5 bg-[#0A468C] text-white rounded-2xl font-black text-base hover:bg-[#072F5F] transition-all mt-2"
               >
                 تحديث بيانات الصنف
               </button>

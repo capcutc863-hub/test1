@@ -1,5 +1,5 @@
 
-import { Product, Customer, SalesRep, User } from './types';
+import type { Product, Customer, SalesRep, User } from './types.ts';
 
 export const INITIAL_USERS: User[] = [
   { 
