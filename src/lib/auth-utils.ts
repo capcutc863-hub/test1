@@ -66,3 +66,57 @@ export function verifyAuthToken(token: string): SessionPayload | null {
     return null;
   }
 }
+
+export interface OwnerStepUpPayload {
+  userId: string;
+  purpose: 'owner_stepup';
+  exp: number;
+}
+
+export function signOwnerStepUpToken(userId: string, ttlMs = 1000 * 60 * 15): string {
+  const payload: OwnerStepUpPayload = {
+    userId,
+    purpose: 'owner_stepup',
+    exp: Date.now() + ttlMs,
+  };
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', TOKEN_SECRET)
+    .update(`stepup:${encoded}`)
+    .digest('base64url');
+  return `${encoded}.${signature}`;
+}
+
+export function verifyOwnerStepUpToken(token: string, expectedUserId: string): boolean {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 2) return false;
+    const [encoded, signature] = parts;
+    const expectedSig = crypto
+      .createHmac('sha256', TOKEN_SECRET)
+      .update(`stepup:${encoded}`)
+      .digest('base64url');
+
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expectedSig);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      return false;
+    }
+
+    const payload = JSON.parse(
+      Buffer.from(encoded, 'base64url').toString('utf8')
+    ) as OwnerStepUpPayload;
+
+    if (
+      payload.purpose !== 'owner_stepup' ||
+      payload.userId !== expectedUserId ||
+      !payload.exp ||
+      Date.now() > payload.exp
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}

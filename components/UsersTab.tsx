@@ -3,11 +3,12 @@ import {
   Users, UserPlus, Shield, Award, CheckCircle2, 
   XCircle, Edit3, DollarSign, Percent, Lock, Unlock, X 
 } from 'lucide-react';
-import { User, SalesRep, UserRole } from '../types';
+import { User, SalesRep, UserRole, ProductCategory } from '../types';
 
 interface UsersTabProps {
   users: User[];
   salesReps: SalesRep[];
+  categories?: ProductCategory[];
   currentUser: User;
   onAddUser: (userData: Omit<User, 'id'> & { password?: string }, initialRepData?: Partial<SalesRep>) => void;
   onUpdateUser: (user: User & { newPassword?: string }) => void;
@@ -17,11 +18,15 @@ interface UsersTabProps {
 export const UsersTab: React.FC<UsersTabProps> = ({
   users,
   salesReps,
+  categories = [],
   currentUser,
   onAddUser,
   onUpdateUser,
   onUpdateRep
 }) => {
+  const isOwner = currentUser.role === 'owner';
+  const isElevatedAdmin = currentUser.role === 'owner' || currentUser.role === 'admin';
+
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingUser, setEditingUser] = useState<(User & { newPassword?: string }) | null>(null);
   const [editingRep, setEditingRep] = useState<SalesRep | null>(null);
@@ -43,15 +48,18 @@ export const UsersTab: React.FC<UsersTabProps> = ({
     e.preventDefault();
     if (!name.trim() || !username.trim()) return;
 
-    const repData: Partial<SalesRep> = role === 'sales' ? {
-      name: name.trim(),
-      customCommissionRate: (parseFloat(commissionRate) || 5) / 100,
-      maxDiscountAllowed: parseFloat(maxDiscount) || 10,
-      totalCommission: 0,
-      pendingCommission: 0,
-      ordersCount: 0,
-      monthlyHistory: []
-    } : undefined;
+    const repData: Partial<SalesRep> | undefined =
+      role === 'sales'
+        ? {
+            name: name.trim(),
+            ...(isOwner ? { customCommissionRate: (parseFloat(commissionRate) || 5) / 100 } : {}),
+            maxDiscountAllowed: parseFloat(maxDiscount) || 10,
+            totalCommission: 0,
+            pendingCommission: 0,
+            ordersCount: 0,
+            monthlyHistory: [],
+          }
+        : undefined;
 
     onAddUser({
       name: name.trim(),
@@ -85,7 +93,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
           <p className="text-xs text-slate-500 font-bold mt-0.5">إدارة الصلاحيات، نسب العمولات، وأرصدة المبيعات</p>
         </div>
 
-        {currentUser.role === 'admin' && (
+        {isElevatedAdmin && (
           <button
             onClick={() => setShowAddModal(true)}
             className="w-full sm:w-auto min-h-[48px] bg-[#0A468C] hover:bg-[#072F5F] text-white px-6 py-3 rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-2 shadow-md"
@@ -100,21 +108,23 @@ export const UsersTab: React.FC<UsersTabProps> = ({
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
         {users.map(user => {
           const rep = salesReps.find(r => r.userId === user.id || r.id === user.salesRepId);
+          const isUserFullAdmin = user.role === 'owner' || user.role === 'admin';
           return (
             <div
               key={user.id}
               className={`bg-white p-5 sm:p-7 rounded-3xl sm:rounded-[2.5rem] shadow-sm border transition-all flex flex-col justify-between ${
-                user.isSuspended ? 'border-red-200 bg-red-50/20' : 'border-slate-200/80 hover:border-blue-200'
+                user.isSuspended ? 'border-red-200 bg-red-50/20' : user.role === 'owner' ? 'border-amber-300 bg-amber-50/10' : 'border-slate-200/80 hover:border-blue-200'
               }`}
             >
               <div>
                 <div className="flex justify-between items-start mb-3.5">
                   <span className={`px-3 py-1 rounded-xl text-xs font-black ${
+                    user.role === 'owner' ? 'bg-amber-100 text-amber-900 border border-amber-300' :
                     user.role === 'admin' ? 'bg-blue-100 text-[#072F5F] border border-blue-200' :
                     user.role === 'supervisor' ? 'bg-slate-200 text-slate-900' :
                     'bg-blue-50 text-[#0A468C]'
                   }`}>
-                    {user.role === 'admin' ? 'مدير عام' : user.role === 'supervisor' ? 'مشرف' : 'سيلز'}
+                    {user.role === 'owner' ? 'المالك الرئيسي (Owner)' : user.role === 'admin' ? 'مدير عام' : user.role === 'supervisor' ? 'مشرف' : 'سيلز'}
                   </span>
 
                   <span className={`text-xs font-bold px-2.5 py-0.5 rounded-lg ${
@@ -130,33 +140,33 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                 {/* Permissions Summary */}
                 <div className="space-y-2 mb-5 text-xs font-bold">
                   <div className="flex justify-between items-center text-slate-700">
-                    <span>تعديل أسعار ومخزون الزيوت</span>
-                    <span className={user.canEditInventory ? 'text-[#0A468C] font-black' : 'text-slate-400'}>
-                      {user.canEditInventory ? 'مسموح' : 'غير مسموح'}
+                    <span>تعديل أسعار ومخزون المنتجات</span>
+                    <span className={user.role === 'owner' || user.canEditInventory ? 'text-[#0A468C] font-black' : 'text-slate-400'}>
+                      {user.role === 'owner' || user.canEditInventory ? 'مسموح' : 'غير مسموح'}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-slate-700">
                     <span>تأكيد تسليم الطلبات</span>
-                    <span className={user.canConfirmDelivery ? 'text-[#0A468C] font-black' : 'text-slate-400'}>
-                      {user.canConfirmDelivery ? 'مسموح' : 'غير مسموح'}
+                    <span className={user.role === 'owner' || user.canConfirmDelivery ? 'text-[#0A468C] font-black' : 'text-slate-400'}>
+                      {user.role === 'owner' || user.canConfirmDelivery ? 'مسموح' : 'غير مسموح'}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-slate-700">
-                    <span>التجهيز والشحن وطلبات التعديل</span>
-                    <span className={user.role === 'admin' || user.canManageOrderStatus ? 'text-[#0A468C] font-black' : 'text-slate-400'}>
-                      {user.role === 'admin' || user.canManageOrderStatus ? 'مسموح' : 'غير مسموح'}
+                    <span>إدارة التجهيز والشحن والمتابعة</span>
+                    <span className={isUserFullAdmin || user.canManageOrderStatus ? 'text-[#0A468C] font-black' : 'text-slate-400'}>
+                      {isUserFullAdmin || user.canManageOrderStatus ? 'مسموح' : 'غير مسموح'}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-slate-700">
                     <span>حذف الفواتير</span>
-                    <span className={user.role === 'admin' || user.canDeleteOrders ? 'text-[#0A468C] font-black' : 'text-slate-400'}>
-                      {user.role === 'admin' || user.canDeleteOrders ? 'مسموح' : 'غير مسموح'}
+                    <span className={isUserFullAdmin || user.canDeleteOrders ? 'text-[#0A468C] font-black' : 'text-slate-400'}>
+                      {isUserFullAdmin || user.canDeleteOrders ? 'مسموح' : 'غير مسموح'}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-slate-700">
                     <span>حذف العملاء</span>
-                    <span className={user.role === 'admin' || user.canDeleteCustomers ? 'text-[#0A468C] font-black' : 'text-slate-400'}>
-                      {user.role === 'admin' || user.canDeleteCustomers ? 'مسموح' : 'غير مسموح'}
+                    <span className={isUserFullAdmin || user.canDeleteCustomers ? 'text-[#0A468C] font-black' : 'text-slate-400'}>
+                      {isUserFullAdmin || user.canDeleteCustomers ? 'مسموح' : 'غير مسموح'}
                     </span>
                   </div>
                 </div>
@@ -165,9 +175,24 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                 {rep && (
                   <div className="bg-blue-50/60 p-4 rounded-2xl border border-blue-100 space-y-2.5 mb-5">
                     <div className="flex justify-between items-center text-xs font-bold text-[#072F5F]">
-                      <span>نسبة العمولة:</span>
-                      <span className="font-black tabular-nums">{(rep.customCommissionRate * 100).toFixed(0)}%</span>
+                      <span>نسبة العمولة الأساسية (الزيوت):</span>
+                      <span className="font-black tabular-nums">{(rep.customCommissionRate * 100).toFixed(1).replace(/\.0$/, '')}%</span>
                     </div>
+                    {rep.categoryRates && Object.keys(rep.categoryRates).length > 0 && (
+                      <div className="flex flex-wrap gap-1 pt-0.5">
+                        {Object.entries(rep.categoryRates).map(([catId, rate]) => {
+                          const catName = categories.find((c) => c.id === catId)?.name || catId;
+                          return (
+                            <span
+                              key={catId}
+                              className="px-2 py-0.5 rounded-lg bg-white border border-blue-200 text-[10px] font-black text-[#0A468C] tabular-nums"
+                            >
+                              {catName}: {(Number(rate) * 100).toFixed(1).replace(/\.0$/, '')}%
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
                     <div className="flex justify-between items-center text-xs font-bold text-[#072F5F]">
                       <span>الحد الأقصى للخصم:</span>
                       <span className="font-black tabular-nums">{rep.maxDiscountAllowed}%</span>
@@ -181,7 +206,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
               </div>
 
               {/* Action Buttons */}
-              {currentUser.role === 'admin' && (
+              {isElevatedAdmin && (user.role !== 'owner' || isOwner) && (
                 <div className="pt-3 border-t border-slate-100 flex justify-between items-center gap-2">
                   <button
                     onClick={() => {
@@ -194,15 +219,23 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                     تعديل الصلاحيات
                   </button>
 
-                  <button
-                    onClick={() => onUpdateUser({ ...user, isSuspended: !user.isSuspended })}
-                    className={`min-h-[44px] text-xs font-black px-3.5 py-2 rounded-xl transition-all flex items-center justify-center gap-1.5 ${
-                      user.isSuspended ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-red-50 text-red-600 hover:bg-red-100'
-                    }`}
-                  >
-                    {user.isSuspended ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
-                    {user.isSuspended ? 'تفعيل' : 'تعطيل'}
-                  </button>
+                  {user.role !== 'owner' && (
+                    <button
+                      onClick={() => onUpdateUser({ ...user, isSuspended: !user.isSuspended })}
+                      className={`min-h-[44px] text-xs font-black px-3.5 py-2 rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                        user.isSuspended ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-red-50 text-red-600 hover:bg-red-100'
+                      }`}
+                    >
+                      {user.isSuspended ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                      {user.isSuspended ? 'تفعيل' : 'تعطيل'}
+                    </button>
+                  )}
+                </div>
+              )}
+              {user.role === 'owner' && !isOwner && (
+                <div className="pt-3 border-t border-amber-100 text-[11px] font-black text-amber-800 flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5" />
+                  حساب محمي — لا يمكن تعديله أو تعطيله إلا بواسطة المالك الرئيسي
                 </div>
               )}
             </div>
@@ -274,17 +307,22 @@ export const UsersTab: React.FC<UsersTabProps> = ({
               </div>
 
               {role === 'sales' && (
-                <div className="grid grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5">نسبة العمولة (%)</label>
-                    <input
-                      type="number"
-                      inputMode="decimal"
-                      value={commissionRate}
-                      onChange={(e) => setCommissionRate(e.target.value)}
-                      className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm tabular-nums"
-                    />
-                  </div>
+                <div className={`grid ${isOwner ? 'grid-cols-2' : 'grid-cols-1'} gap-3.5`}>
+                  {isOwner && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">نسبة العمولة الأساسية (%)</label>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        step="0.1"
+                        min="0"
+                        max="100"
+                        value={commissionRate}
+                        onChange={(e) => setCommissionRate(e.target.value)}
+                        className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm tabular-nums"
+                      />
+                    </div>
+                  )}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5">أقصى خصم مسموح (%)</label>
                     <input
@@ -326,7 +364,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                     onChange={(e) => setCanManageOrderStatus(e.target.checked)}
                     className="w-5 h-5 accent-[#0A468C] rounded"
                   />
-                  <span className="text-xs sm:text-sm font-bold text-[#072F5F]">مسؤول حالة الطلبات (تم التجهيز / تم الشحن وطلبات التعديل)</span>
+                  <span className="text-xs sm:text-sm font-bold text-[#072F5F]">مسؤول التجهيز والشحن والمتابعة حتى التسليم/المرتجع وطلبات التعديل</span>
                 </label>
 
                 <label className="min-h-[48px] flex items-center gap-3 p-3 bg-slate-50 rounded-xl cursor-pointer">
@@ -398,20 +436,32 @@ export const UsersTab: React.FC<UsersTabProps> = ({
               </div>
 
               {editingRep && (
-                <div className="grid grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5">نسبة العمولة (%)</label>
-                    <input
-                      type="number"
-                      inputMode="decimal"
-                      value={(editingRep.customCommissionRate * 100).toString()}
-                      onChange={(e) => {
-                        const val = (parseFloat(e.target.value) || 0) / 100;
-                        setEditingRep({ ...editingRep, customCommissionRate: val });
-                      }}
-                      className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm tabular-nums"
-                    />
-                  </div>
+                <div className={`grid ${isOwner ? 'grid-cols-2' : 'grid-cols-1'} gap-3.5`}>
+                  {isOwner ? (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">نسبة العمولة الأساسية (%)</label>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        step="0.1"
+                        min="0"
+                        max="100"
+                        value={Number((editingRep.customCommissionRate * 100).toFixed(2)).toString()}
+                        onChange={(e) => {
+                          const val = Math.max(0, Math.min(1, (parseFloat(e.target.value) || 0) / 100));
+                          setEditingRep({ ...editingRep, customCommissionRate: val });
+                        }}
+                        className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm tabular-nums"
+                      />
+                      <p className="text-[10px] font-bold text-slate-500 mt-1">
+                        لإدارة نسب كل تصنيف للمندوب استخدم لوحة المالك الرئيسي ← قواعد العمولات
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-[11px] font-bold text-amber-900">
+                      نسب العمولات محمية — تعديل عمولات المناديب متاح للمالك الرئيسي فقط.
+                    </div>
+                  )}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5">أقصى خصم (%)</label>
                     <input
@@ -453,7 +503,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                     onChange={(e) => setEditingUser({ ...editingUser, canManageOrderStatus: e.target.checked })}
                     className="w-5 h-5 accent-[#0A468C] rounded"
                   />
-                  <span className="text-xs sm:text-sm font-bold text-[#072F5F]">مسؤول حالة الطلبات (تم التجهيز / تم الشحن وطلبات التعديل)</span>
+                  <span className="text-xs sm:text-sm font-bold text-[#072F5F]">مسؤول التجهيز والشحن والمتابعة حتى التسليم/المرتجع وطلبات التعديل</span>
                 </label>
 
                 <label className="min-h-[48px] flex items-center gap-3 p-3 bg-slate-50 rounded-xl cursor-pointer">

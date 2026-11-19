@@ -18,28 +18,61 @@ import {
   PackageCheck,
   Truck,
   CheckCircle2,
+  ClipboardList,
+  ShieldCheck,
+  KeyRound,
 } from 'lucide-react';
-import { Product, Customer, SalesRep, Order, OrderStatus, User, ChatMessage } from './types';
+import {
+  Product,
+  Customer,
+  SalesRep,
+  Order,
+  OrderStatus,
+  User,
+  ChatMessage,
+  ProductCategory,
+  CommissionConfig,
+  SystemGeneralSettings,
+} from './types';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
-import { apiClient } from './src/lib/api';
+import {
+  apiClient,
+  setOwnerStepUpToken,
+  type ManageItemSourcingPayload,
+  type OrderStatusTransitionPayload,
+} from './src/lib/api';
+import { DEFAULT_CATEGORIES, DEFAULT_COMMISSION_CONFIG } from './src/lib/commission-utils';
 import Invoice from './components/Invoice';
 import { DashboardTab } from './components/DashboardTab';
 import { OrdersTab } from './components/OrdersTab';
+import { OperationsTab } from './components/OperationsTab';
 import { OrderFormModal } from './components/OrderFormModal';
 import { InventoryTab } from './components/InventoryTab';
 import { CustomersTab } from './components/CustomersTab';
 import { UsersTab } from './components/UsersTab';
 import { TeamChatModal } from './components/TeamChatModal';
+import { OwnerConsoleTab } from './components/OwnerConsoleTab';
+import { PdfPriceImportModal } from './components/PdfPriceImportModal';
 
 type AppTab =
   | 'dashboard'
+  | 'operations'
   | 'orders'
   | 'prepared-orders'
   | 'shipping-orders'
   | 'delivered-orders'
   | 'inventory'
   | 'customers'
-  | 'admin-users';
+  | 'admin-users'
+  | 'owner-console';
+
+const DEFAULT_GENERAL_SETTINGS: SystemGeneralSettings = {
+  companyName: 'Kima Scent',
+  defaultShippingCost: 50,
+  lowStockThresholdOils: 5000,
+  lowStockThresholdOther: 50,
+  allowCustomItemsInInvoices: true,
+};
 
 const LOGO_SRC = '/assets/aistudio/logo_after_edit__2-1__80f21b58.png';
 
@@ -52,6 +85,7 @@ const AppContent: React.FC = () => {
     authLoading,
     authError,
     loginWithUsername,
+    completeAuthenticatedSession,
     logout,
     setAuthUser,
   } = useAuth();
@@ -63,6 +97,11 @@ const AppContent: React.FC = () => {
 
   const [users, setUsers] = useState<User[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<ProductCategory[]>(DEFAULT_CATEGORIES);
+  const [commissionConfig, setCommissionConfig] = useState<CommissionConfig>(DEFAULT_COMMISSION_CONFIG);
+  const [generalSettings, setGeneralSettings] = useState<SystemGeneralSettings>(DEFAULT_GENERAL_SETTINGS);
+  const [hasOwnerAccount, setHasOwnerAccount] = useState<boolean>(true);
+  const [canBootstrapOwner, setCanBootstrapOwner] = useState<boolean>(false);
   const [salesReps, setSalesReps] = useState<SalesRep[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -76,7 +115,23 @@ const AppContent: React.FC = () => {
   const [orderModalMode, setOrderModalMode] = useState<'create' | 'edit' | 'edit-request' | 'approve-override'>('create');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [showChat, setShowChat] = useState(false);
+  const [showPdfImportModal, setShowPdfImportModal] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // One-time initial Owner claim modal (visible only if no owner exists yet)
+  const [showClaimOwnerModal, setShowClaimOwnerModal] = useState(false);
+  const [claimPassword, setClaimPassword] = useState('');
+  const [claimRecoveryKey, setClaimRecoveryKey] = useState('');
+  const [claimError, setClaimError] = useState<string | null>(null);
+  const [claimingOwner, setClaimingOwner] = useState(false);
+
+  // Owner password recovery modal on Login screen
+  const [showRecoverOwnerModal, setShowRecoverOwnerModal] = useState(false);
+  const [recUsername, setRecUsername] = useState('');
+  const [recKey, setRecKey] = useState('');
+  const [recNewPassword, setRecNewPassword] = useState('');
+  const [recError, setRecError] = useState<string | null>(null);
+  const [recoveringOwner, setRecoveringOwner] = useState(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -87,6 +142,11 @@ const AppContent: React.FC = () => {
     (data: {
       users: User[];
       products: Product[];
+      categories?: ProductCategory[];
+      commissionConfig?: CommissionConfig;
+      generalSettings?: SystemGeneralSettings;
+      hasOwnerAccount?: boolean;
+      canBootstrapOwner?: boolean;
       salesReps: SalesRep[];
       customers: Customer[];
       orders: Order[];
@@ -94,6 +154,23 @@ const AppContent: React.FC = () => {
     }) => {
       setUsers(data.users);
       setProducts(data.products);
+      if (Array.isArray(data.categories) && data.categories.length > 0) {
+        setCategories(data.categories);
+      }
+      if (data.commissionConfig) {
+        setCommissionConfig(data.commissionConfig);
+      }
+      if (data.generalSettings) {
+        setGeneralSettings(data.generalSettings);
+      }
+      if (typeof data.hasOwnerAccount === 'boolean') {
+        setHasOwnerAccount(data.hasOwnerAccount);
+        setCanBootstrapOwner(
+          typeof data.canBootstrapOwner === 'boolean'
+            ? data.canBootstrapOwner
+            : !data.hasOwnerAccount
+        );
+      }
       setSalesReps(data.salesReps);
       setCustomers(data.customers);
       setOrders(data.orders);
@@ -137,10 +214,16 @@ const AppContent: React.FC = () => {
     } else {
       setUsers([]);
       setProducts([]);
+      setCategories(DEFAULT_CATEGORIES);
+      setCommissionConfig(DEFAULT_COMMISSION_CONFIG);
+      setGeneralSettings(DEFAULT_GENERAL_SETTINGS);
+      setHasOwnerAccount(true);
+      setCanBootstrapOwner(false);
       setSalesReps([]);
       setCustomers([]);
       setOrders([]);
       setChatMessages([]);
+      setOwnerStepUpToken(null);
     }
   }, [authUser?.id, authToken, initialWorkspace, clearInitialWorkspace, applyWorkspaceData, refreshData]);
 
@@ -155,11 +238,66 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const handleClaimInitialOwner = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (claimingOwner) return;
+    setClaimError(null);
+    if (!claimPassword) {
+      setClaimError('يرجى إدخال كلمة مرورك الحالية.');
+      return;
+    }
+    if (claimRecoveryKey.trim().length < 8) {
+      setClaimError('مفتاح الاستعادة يجب أن لا يقل عن 8 أحرف أو أرقام.');
+      return;
+    }
+    setClaimingOwner(true);
+    try {
+      const res = await apiClient.claimInitialOwner(claimPassword, claimRecoveryKey.trim());
+      completeAuthenticatedSession(res.token, res.user, res.workspace);
+      setShowClaimOwnerModal(false);
+      setClaimPassword('');
+      setClaimRecoveryKey('');
+      showToast('تم تفعيل صلاحية المالك الرئيسي وحفظ مفتاح الاستعادة بنجاح');
+    } catch (err: unknown) {
+      setClaimError(err instanceof Error ? err.message : 'تعذر تفعيل حساب المالك الرئيسي.');
+    } finally {
+      setClaimingOwner(false);
+    }
+  };
+
+  const handleRecoverOwnerSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRecError(null);
+    if (!recUsername.trim() || !recKey.trim() || recNewPassword.length < 6) {
+      setRecError('يرجى إدخال اسم المستخدم ومفتاح الاستعادة وكلمة مرور جديدة (6 أحرف فأكثر).');
+      return;
+    }
+    setRecoveringOwner(true);
+    try {
+      const res = await apiClient.recoverOwnerAccess(
+        recUsername.trim(),
+        recKey.trim(),
+        recNewPassword
+      );
+      completeAuthenticatedSession(res.token, res.user, res.workspace);
+      setShowRecoverOwnerModal(false);
+      setRecUsername('');
+      setRecKey('');
+      setRecNewPassword('');
+      setActiveTab('dashboard');
+      showToast('تمت استعادة حساب المالك الرئيسي وتسجيل الدخول بنجاح');
+    } catch (err: unknown) {
+      setRecError(err instanceof Error ? err.message : 'فشل التحقق من بيانات الاستعادة');
+    } finally {
+      setRecoveringOwner(false);
+    }
+  };
+
   const handleSaveNewOrder = async (orderData: Omit<Order, 'id' | 'createdAt'>) => {
     try {
       const newOrder = await apiClient.createOrder(orderData);
       await refreshData();
-      showToast('تم إصدار الفاتورة وحفظها بنجاح ✅');
+      showToast('تم حفظ الفاتورة بانتظار تأكيد العميل ✅');
       setSelectedOrder(newOrder);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'حدث خطأ أثناء حفظ الفاتورة';
@@ -199,13 +337,81 @@ const AppContent: React.FC = () => {
         return;
       }
 
-      const updated = await apiClient.updateOrder(editingOrder.id, orderData);
+      const updated = await apiClient.updateOrder(editingOrder.id, {
+        ...orderData,
+        expectedVersion: editingOrder.version,
+        reason: requestReason,
+      });
       await refreshData();
       showToast('تم تعديل الفاتورة وتحديث البيانات بنجاح ✅');
       setEditingOrder(null);
       setSelectedOrder(updated);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'حدث خطأ أثناء تعديل الفاتورة';
+      showToast(message);
+      throw err;
+    }
+  };
+
+  const handleConfirmOrder = async (orderId: string) => {
+    try {
+      const updated = await apiClient.confirmOrder(orderId);
+      await refreshData();
+      setSelectedOrder((prev) => (prev && prev.id === orderId ? updated : prev));
+      showToast('تم تأكيد الطلب وخصم المخزون وإرساله للتجهيز ✅');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'تعذر تأكيد الطلب';
+      showToast(message);
+      throw err;
+    }
+  };
+
+  const handleCancelOrder = async (orderId: string, reason: string) => {
+    try {
+      const updated = await apiClient.cancelOrder(orderId, reason);
+      await refreshData();
+      setSelectedOrder((prev) => (prev && prev.id === orderId ? updated : prev));
+      showToast('تم إلغاء الفاتورة وحفظها في السجل بنجاح');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'تعذر إلغاء الفاتورة';
+      showToast(message);
+      throw err;
+    }
+  };
+
+  const handleReviewOrderRevision = async (
+    orderId: string,
+    status:
+      | 'تمت مراجعة التعديل واعتماده'
+      | 'يحتاج إعادة تجهيز'
+      | 'تمت إعادة التجهيز'
+      | 'تمت مراجعة التعديل'
+      | 'التعديل جاهز لاستكمال التجهيز',
+    note?: string
+  ) => {
+    try {
+      const updated = await apiClient.reviewOrderRevision(orderId, status, note);
+      await refreshData();
+      setSelectedOrder((prev) => (prev && prev.id === orderId ? updated : prev));
+      showToast(`تم تسجيل: ${status} ✅`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'تعذر تحديث مراجعة التعديل';
+      showToast(message);
+      throw err;
+    }
+  };
+
+  const handleManageOrderItemSourcing = async (
+    orderId: string,
+    payload: ManageItemSourcingPayload
+  ) => {
+    try {
+      const updated = await apiClient.manageOrderItemSourcing(orderId, payload);
+      await refreshData();
+      setSelectedOrder((prev) => (prev && prev.id === orderId ? updated : prev));
+      showToast('تم تحديث مصدر وتوريد الصنف والمخزون بنجاح ✅');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'تعذر تحديث توريد الصنف';
       showToast(message);
       throw err;
     }
@@ -225,24 +431,103 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const isOwnerOrElevatedUser = (order: Order): boolean => {
+    if (!authUser) return false;
+    return (
+      authUser.role === 'owner' ||
+      authUser.role === 'admin' ||
+      authUser.role === 'supervisor' ||
+      Boolean(authUser.canManageOrderStatus) ||
+      !authUser.salesRepId ||
+      order.salesRepId === authUser.salesRepId
+    );
+  };
+
   const getOrderEditAction = (order: Order): { allowed: boolean; mode: 'edit' | 'edit-request'; label: string } => {
     if (!authUser) return { allowed: false, mode: 'edit', label: 'تعديل' };
-    if (authUser.role === 'admin') return { allowed: true, mode: 'edit', label: 'تعديل' };
-    if (order.status === 'قيد التنفيذ') return { allowed: true, mode: 'edit', label: 'تعديل' };
-    if (order.status === 'تم التجهيز') {
+    if (authUser.role === 'owner' || authUser.role === 'admin') {
+      return { allowed: true, mode: 'edit', label: 'تعديل' };
+    }
+    if (
+      order.status === 'بانتظار تأكيد العميل' ||
+      order.status === 'طلب جديد' ||
+      order.status === 'بانتظار التجهيز' ||
+      order.status === 'قيد التنفيذ'
+    ) {
+      return isOwnerOrElevatedUser(order)
+        ? { allowed: true, mode: 'edit', label: 'تعديل' }
+        : { allowed: false, mode: 'edit', label: 'تعديل' };
+    }
+    if (order.status === 'جاري التجهيز' || order.status === 'تم التجهيز') {
       if (authUser.canManageOrderStatus) return { allowed: true, mode: 'edit', label: 'تعديل' };
-      return { allowed: true, mode: 'edit-request', label: 'طلب تعديل' };
+      return isOwnerOrElevatedUser(order)
+        ? { allowed: true, mode: 'edit-request', label: 'طلب تعديل' }
+        : { allowed: false, mode: 'edit', label: 'تعديل' };
     }
     return { allowed: false, mode: 'edit', label: 'تعديل' };
   };
 
-  const handleUpdateOrderStatus = async (orderId: string, newStatus: OrderStatus) => {
+  const canConfirmOrderAction = (order: Order): boolean =>
+    order.status === 'بانتظار تأكيد العميل' && isOwnerOrElevatedUser(order);
+
+  const canCancelOrderAction = (order: Order): boolean => {
+    if (!authUser) return false;
+    if (order.status === 'بانتظار تأكيد العميل') {
+      return isOwnerOrElevatedUser(order);
+    }
+    if (
+      order.status === 'طلب جديد' ||
+      order.status === 'بانتظار التجهيز' ||
+      order.status === 'جاري التجهيز' ||
+      order.status === 'تم التجهيز' ||
+      order.status === 'قيد التنفيذ'
+    ) {
+      return (
+        authUser.role === 'owner' ||
+        authUser.role === 'admin' ||
+        Boolean(authUser.canManageOrderStatus)
+      );
+    }
+    return false;
+  };
+
+  const handleUpdateOrderStatus = async (
+    orderId: string,
+    newStatus: OrderStatus,
+    options?: OrderStatusTransitionPayload
+  ) => {
     try {
-      await apiClient.updateOrderStatus(orderId, newStatus);
+      await apiClient.updateOrderStatus(orderId, newStatus, options);
       await refreshData();
       showToast(`تم تحديث حالة الطلب إلى: ${newStatus} ✅`);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'حدث خطأ أثناء تحديث الحالة');
+      throw err;
+    }
+  };
+
+  const handleHoldOrder = async (
+    orderId: string,
+    payload: { isHeld: boolean; reason?: string; notes?: string }
+  ) => {
+    try {
+      await apiClient.holdOrder(orderId, payload);
+      await refreshData();
+      showToast(payload.isHeld ? 'تم تعليق الطلب بنجاح ⏸️' : 'تم فك تعليق الطلب واستئناف التشغيل ▶️');
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'حدث خطأ أثناء تحديث حالة التعليق');
+      throw err;
+    }
+  };
+
+  const handleUpdateOperationalNotes = async (orderId: string, operationalNotes: string) => {
+    try {
+      await apiClient.updateOperationalNotes(orderId, operationalNotes);
+      await refreshData();
+      showToast('تم حفظ الملاحظات التشغيلية ✅');
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'تعذر حفظ الملاحظات التشغيلية');
+      throw err;
     }
   };
 
@@ -250,7 +535,7 @@ const AppContent: React.FC = () => {
     try {
       await apiClient.deleteOrder(orderId);
       await refreshData();
-      showToast('تم حذف الفاتورة وإعادة الكميات للمخزون بنجاح 🗑️');
+      showToast('تم حذف الفاتورة بنجاح 🗑️');
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'حدث خطأ أثناء حذف الفاتورة');
     }
@@ -276,13 +561,36 @@ const AppContent: React.FC = () => {
     }
   };
 
-  const handleAddProduct = async (productData: Omit<Product, 'id'>) => {
+  const handleUpdateCustomer = async (
+    customerId: string,
+    customerData: { name: string; phone?: string; address?: string }
+  ) => {
+    try {
+      const res = await apiClient.updateCustomer(customerId, customerData);
+      await refreshData();
+      showToast(
+        res.linkedOrdersSynced > 0
+          ? `تم تحديث بيانات العميل وربط ${res.linkedOrdersSynced} فاتورة تاريخية بنجاح ✅`
+          : 'تم تحديث بيانات العميل بنجاح ✅'
+      );
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'حدث خطأ أثناء تحديث بيانات العميل';
+      showToast(message);
+      throw err;
+    }
+  };
+
+  const handleAddProduct = async (
+    productData: Partial<Omit<Product, 'id'>> & Pick<Product, 'name' | 'pricePerMg' | 'stock'>
+  ) => {
     try {
       await apiClient.createProduct(productData);
       await refreshData();
-      showToast('تم إضافة صنف الزيت بنجاح ✅');
+      showToast('تم إضافة الصنف بنجاح');
     } catch (err: unknown) {
-      showToast(err instanceof Error ? err.message : 'حدث خطأ أثناء إضافة الصنف');
+      const message = err instanceof Error ? err.message : 'حدث خطأ أثناء إضافة الصنف';
+      showToast(message);
+      throw err;
     }
   };
 
@@ -290,9 +598,35 @@ const AppContent: React.FC = () => {
     try {
       await apiClient.updateProduct(updatedProduct);
       await refreshData();
-      showToast('تم تحديث بيانات الصنف ✅');
+      showToast('تم تحديث بيانات الصنف');
     } catch (err: unknown) {
-      showToast(err instanceof Error ? err.message : 'حدث خطأ أثناء تحديث الصنف');
+      const message = err instanceof Error ? err.message : 'حدث خطأ أثناء تحديث الصنف';
+      showToast(message);
+      throw err;
+    }
+  };
+
+  const handleArchiveProduct = async (productId: string, isActive: boolean, reason?: string) => {
+    try {
+      await apiClient.archiveProduct(productId, isActive, reason);
+      await refreshData();
+      showToast(isActive ? 'تمت استعادة الصنف وتفعيله بنجاح ✅' : 'تمت أرشفة الصنف بنجاح 📦');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'حدث خطأ أثناء تحديث حالة أرشفة الصنف';
+      showToast(message);
+      throw err;
+    }
+  };
+
+  const handleDeleteProduct = async (productId: string, confirmPassword?: string) => {
+    try {
+      await apiClient.deleteProduct(productId, confirmPassword);
+      await refreshData();
+      showToast('تم حذف الصنف نهائياً من الكتالوج 🗑️');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'حدث خطأ أثناء حذف الصنف';
+      showToast(message);
+      throw err;
     }
   };
 
@@ -347,28 +681,44 @@ const AppContent: React.FC = () => {
     return salesReps.find((r) => r.userId === authUser?.id || r.id === authUser?.salesRepId);
   }, [salesReps, authUser]);
 
-  const canAccessInventory = Boolean(
-    authUser && (authUser.role === 'admin' || authUser.role === 'supervisor' || authUser.canEditInventory)
+  const canAccessOperations = Boolean(
+    authUser && (authUser.role === 'owner' || authUser.role === 'admin' || authUser.canManageOrderStatus)
   );
-  const canAccessUsers = Boolean(authUser && authUser.role === 'admin');
+  const canAccessInventory = Boolean(
+    authUser &&
+      (authUser.role === 'owner' ||
+        authUser.role === 'admin' ||
+        authUser.role === 'supervisor' ||
+        authUser.canEditInventory)
+  );
+  const canAccessUsers = Boolean(
+    authUser && (authUser.role === 'owner' || authUser.role === 'admin')
+  );
+  const canAccessOwnerConsole = Boolean(authUser && authUser.role === 'owner');
 
   const handleNavigateTab = useCallback(
     (tab: AppTab) => {
+      if (tab === 'operations' && !canAccessOperations) return;
       if (tab === 'inventory' && !canAccessInventory) return;
       if (tab === 'admin-users' && !canAccessUsers) return;
+      if (tab === 'owner-console' && !canAccessOwnerConsole) return;
       setActiveTab(tab);
       setIsMobileMenuOpen(false);
     },
-    [canAccessInventory, canAccessUsers]
+    [canAccessOperations, canAccessInventory, canAccessUsers, canAccessOwnerConsole]
   );
 
   useEffect(() => {
-    if (activeTab === 'inventory' && !canAccessInventory) {
+    if (activeTab === 'operations' && !canAccessOperations) {
+      setActiveTab('dashboard');
+    } else if (activeTab === 'inventory' && !canAccessInventory) {
       setActiveTab('dashboard');
     } else if (activeTab === 'admin-users' && !canAccessUsers) {
       setActiveTab('dashboard');
+    } else if (activeTab === 'owner-console' && !canAccessOwnerConsole) {
+      setActiveTab('dashboard');
     }
-  }, [activeTab, canAccessInventory, canAccessUsers]);
+  }, [activeTab, canAccessOperations, canAccessInventory, canAccessUsers, canAccessOwnerConsole]);
 
   // 1. Username & Password Login Screen
   if (!authUser || !authToken) {
@@ -381,7 +731,7 @@ const AppContent: React.FC = () => {
             className="h-20 sm:h-24 w-auto object-contain mb-3"
           />
           <p className="text-sm font-bold text-slate-600 mb-6 text-center">
-            نظام إدارة مبيعات الزيوت العطرية والفواتير
+            نظام إدارة المبيعات والكتالوج والفواتير
           </p>
 
           {authError && (
@@ -428,8 +778,91 @@ const AppContent: React.FC = () => {
               {authLoading && <RefreshCcw className="w-5 h-5 animate-spin" />}
               {authLoading ? 'جاري الدخول وتجهيز البيانات...' : 'تسجيل الدخول'}
             </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setRecError(null);
+                setShowRecoverOwnerModal(true);
+              }}
+              className="w-full py-2 text-xs font-black text-[#0A468C] hover:underline flex items-center justify-center gap-1.5"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              نسيت كلمة مرور المالك / استعادة الحساب
+            </button>
           </form>
         </div>
+
+        {/* Owner Recovery Modal */}
+        {showRecoverOwnerModal && (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-[800]" dir="rtl">
+            <div className="bg-white w-full max-w-md rounded-3xl p-6 sm:p-7 shadow-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="text-lg font-black text-[#072F5F] flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-amber-600" />
+                  استعادة حساب المالك الرئيسي
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setShowRecoverOwnerModal(false)}
+                  className="p-2 hover:bg-slate-100 rounded-xl"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-xs font-bold text-slate-600 leading-relaxed">
+                أدخل اسم مستخدم المالك ومفتاح الاستعادة السري المحفوظ لإعادة تعيين كلمة المرور واستعادة الدخول فورًا.
+              </p>
+              {recError && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-2xl text-xs font-black">
+                  {recError}
+                </div>
+              )}
+              <form onSubmit={(e) => void handleRecoverOwnerSubmit(e)} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">اسم مستخدم المالك</label>
+                  <input
+                    type="text"
+                    value={recUsername}
+                    onChange={(e) => setRecUsername(e.target.value)}
+                    placeholder="username"
+                    className="w-full min-h-[44px] px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">مفتاح الاستعادة (Recovery Key)</label>
+                  <input
+                    type="password"
+                    value={recKey}
+                    onChange={(e) => setRecKey(e.target.value)}
+                    placeholder="أدخل مفتاح الاستعادة السري"
+                    className="w-full min-h-[44px] px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">كلمة المرور الجديدة (6 أحرف فأكثر)</label>
+                  <input
+                    type="password"
+                    value={recNewPassword}
+                    onChange={(e) => setRecNewPassword(e.target.value)}
+                    placeholder="********"
+                    className="w-full min-h-[44px] px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm"
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={recoveringOwner}
+                  className="w-full min-h-[48px] bg-[#072F5F] hover:bg-[#0A468C] text-white rounded-2xl font-black text-sm disabled:opacity-60"
+                >
+                  {recoveringOwner ? 'جاري التحقق والاستعادة...' : 'تعيين كلمة المرور والدخول'}
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -494,6 +927,15 @@ const AppContent: React.FC = () => {
     );
   }
 
+  const activeOperationsCount = orders.filter(
+    (o) =>
+      o.status === 'طلب جديد' ||
+      o.status === 'قيد التنفيذ' ||
+      o.status === 'بانتظار التجهيز' ||
+      o.status === 'جاري التجهيز' ||
+      o.status === 'تم التجهيز' ||
+      o.status === 'تم الشحن'
+  ).length;
   const preparedCount = orders.filter((o) => o.status === 'تم التجهيز').length;
   const shippingCount = orders.filter((o) => o.status === 'تم الشحن').length;
   const deliveredCount = orders.filter((o) => o.status === 'تم التسليم').length;
@@ -512,6 +954,14 @@ const AppContent: React.FC = () => {
       shortLabel: 'الرئيسية',
       icon: <LayoutDashboard className="w-5 h-5" />,
       visible: true,
+    },
+    {
+      id: 'operations',
+      label: 'إدارة التجهيز والشحن',
+      shortLabel: 'التشغيل',
+      icon: <ClipboardList className="w-5 h-5" />,
+      badge: activeOperationsCount,
+      visible: canAccessOperations,
     },
     {
       id: 'orders',
@@ -546,7 +996,7 @@ const AppContent: React.FC = () => {
     },
     {
       id: 'inventory',
-      label: 'المخزون والزيوت',
+      label: 'المنتجات والمخزون',
       shortLabel: 'المخزون',
       icon: <Package className="w-5 h-5" />,
       visible: canAccessInventory,
@@ -564,6 +1014,13 @@ const AppContent: React.FC = () => {
       shortLabel: 'الفريق',
       icon: <Award className="w-5 h-5" />,
       visible: canAccessUsers,
+    },
+    {
+      id: 'owner-console',
+      label: 'إدارة المالك الرئيسي',
+      shortLabel: 'المالك',
+      icon: <ShieldCheck className="w-5 h-5" />,
+      visible: canAccessOwnerConsole,
     },
   ];
 
@@ -701,7 +1158,13 @@ const AppContent: React.FC = () => {
             <div className="space-y-0.5">
               <p className="text-sm font-black text-white">{authUser.name}</p>
               <p className="text-xs text-blue-200 font-bold">
-                {authUser.role === 'admin' ? 'مدير عام' : authUser.role === 'supervisor' ? 'مشرف' : 'سيلز'}
+                {authUser.role === 'owner'
+                  ? 'المالك الرئيسي'
+                  : authUser.role === 'admin'
+                    ? 'مدير عام'
+                    : authUser.role === 'supervisor'
+                      ? 'مشرف'
+                      : 'سيلز'}
               </p>
             </div>
             <button
@@ -729,20 +1192,45 @@ const AppContent: React.FC = () => {
           </div>
         )}
 
+        {authUser.role === 'admin' && !hasOwnerAccount && canBootstrapOwner && (
+          <div className="mb-5 bg-amber-50 border border-amber-300 text-amber-950 px-4 sm:px-5 py-3.5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 no-print">
+            <div className="flex items-start gap-2.5 text-xs sm:text-sm font-bold">
+              <ShieldCheck className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-black">لم يتم تفعيل حساب المالك الرئيسي (Owner) للنظام بعد</p>
+                <p className="text-xs text-amber-800">
+                  يمكنك الآن بصفتك المدير الحالي تفعيل صلاحية المالك الرئيسي لمرة واحدة مع تعيين مفتاح استعادة آمن.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                setClaimError(null);
+                setShowClaimOwnerModal(true);
+              }}
+              className="min-h-[42px] px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black whitespace-nowrap shrink-0"
+            >
+              تفعيل المالك الرئيسي الآن
+            </button>
+          </div>
+        )}
+
         <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-5 sm:mb-8 no-print">
           <div>
             <h2 className="text-lg sm:text-2xl md:text-3xl font-black text-slate-900">
               {activeTab === 'dashboard' && 'لوحة التحكم والتقارير'}
+              {activeTab === 'operations' && canAccessOperations && 'إدارة التجهيز والشحن والمتابعة'}
               {activeTab === 'orders' && 'سجل الفواتير والمبيعات'}
               {activeTab === 'prepared-orders' && 'الطلبات المجهزة'}
               {activeTab === 'shipping-orders' && 'الطلبات في الشحن'}
               {activeTab === 'delivered-orders' && 'طلبات تم تسليمها'}
-              {activeTab === 'inventory' && canAccessInventory && 'مخزون الزيوت العطرية'}
+              {activeTab === 'inventory' && canAccessInventory && 'كتالوج المنتجات والمخزون'}
               {activeTab === 'customers' && 'إدارة العملاء والتسويق الذكي'}
               {activeTab === 'admin-users' && canAccessUsers && 'فريق العمل والعمولات'}
+              {activeTab === 'owner-console' && canAccessOwnerConsole && 'إدارة المالك الرئيسي'}
             </h2>
             <p className="text-xs font-bold text-slate-500 mt-0.5 hidden sm:block">
-              Kima Scent — نظام متكامل لإدارة مبيعات الزيوت العطرية والعمولات والفواتير
+              {generalSettings.companyName || 'Kima Scent'} — نظام متكامل لإدارة المبيعات والكتالوج والعمولات والفواتير
             </p>
           </div>
 
@@ -762,10 +1250,41 @@ const AppContent: React.FC = () => {
               products={products}
               salesReps={salesReps}
               customers={customers}
+              generalSettings={generalSettings}
               currentUser={authUser}
               onOpenNewOrder={() => setShowOrderForm(true)}
               onSelectOrder={(order) => setSelectedOrder(order)}
               onNavigateTab={(tab) => handleNavigateTab(tab)}
+            />
+          )}
+
+          {activeTab === 'operations' && canAccessOperations && (
+            <OperationsTab
+              orders={orders}
+              products={products}
+              currentUser={authUser}
+              onSelectOrder={(order) => setSelectedOrder(order)}
+              onEditOrder={(order, mode) => {
+                setOrderModalMode(mode || getOrderEditAction(order).mode);
+                setEditingOrder(order);
+              }}
+              onTransitionStatus={(orderId, status, options) =>
+                handleUpdateOrderStatus(orderId, status, options)
+              }
+              onReviewRevision={(orderId, status, note) =>
+                handleReviewOrderRevision(orderId, status, note)
+              }
+              onManageItemSourcing={(orderId, payload) =>
+                handleManageOrderItemSourcing(orderId, payload)
+              }
+              onCancelOrder={(orderId, reason) => handleCancelOrder(orderId, reason)}
+              onHoldOrder={(orderId, payload) => handleHoldOrder(orderId, payload)}
+              onUpdateOperationalNotes={(orderId, notes) =>
+                handleUpdateOperationalNotes(orderId, notes)
+              }
+              onResolveEditRequest={(orderId, action) =>
+                handleResolveOrderEditRequest(orderId, action)
+              }
             />
           )}
 
@@ -795,7 +1314,11 @@ const AppContent: React.FC = () => {
                 setOrderModalMode(mode || getOrderEditAction(order).mode);
                 setEditingOrder(order);
               }}
-              onUpdateStatus={(orderId, status) => void handleUpdateOrderStatus(orderId, status)}
+              onConfirmOrder={(orderId) => handleConfirmOrder(orderId)}
+              onCancelOrder={(orderId, reason) => handleCancelOrder(orderId, reason)}
+              onUpdateStatus={(orderId, status, options) =>
+                handleUpdateOrderStatus(orderId, status, options)
+              }
               onResolveEditRequest={(orderId, action) =>
                 handleResolveOrderEditRequest(orderId, action)
               }
@@ -806,9 +1329,15 @@ const AppContent: React.FC = () => {
           {activeTab === 'inventory' && canAccessInventory && (
             <InventoryTab
               products={products}
+              categories={categories}
+              commissionConfig={commissionConfig}
+              generalSettings={generalSettings}
               currentUser={authUser}
-              onAddProduct={(p) => void handleAddProduct(p)}
-              onUpdateProduct={(p) => void handleUpdateProduct(p)}
+              onOpenPdfImport={canAccessOwnerConsole ? () => setShowPdfImportModal(true) : undefined}
+              onAddProduct={(p) => handleAddProduct(p)}
+              onUpdateProduct={(p) => handleUpdateProduct(p)}
+              onArchiveProduct={(id, nextActive, reason) => handleArchiveProduct(id, nextActive, reason)}
+              onDeleteProduct={(id, confirmPassword) => handleDeleteProduct(id, confirmPassword)}
             />
           )}
 
@@ -820,6 +1349,7 @@ const AppContent: React.FC = () => {
               currentUser={authUser}
               onDeleteCustomer={(id) => void handleDeleteCustomer(id)}
               onAddCustomer={(c) => void handleAddCustomer(c)}
+              onUpdateCustomer={(id, data) => handleUpdateCustomer(id, data)}
             />
           )}
 
@@ -827,10 +1357,26 @@ const AppContent: React.FC = () => {
             <UsersTab
               users={users}
               salesReps={salesReps}
+              categories={categories}
               currentUser={authUser}
               onAddUser={(u, r) => void handleAddUser(u, r)}
               onUpdateUser={(u) => void handleUpdateUser(u)}
               onUpdateRep={(r) => void handleUpdateRep(r)}
+            />
+          )}
+
+          {activeTab === 'owner-console' && canAccessOwnerConsole && (
+            <OwnerConsoleTab
+              currentUser={authUser}
+              products={products}
+              categories={categories}
+              salesReps={salesReps}
+              commissionConfig={commissionConfig}
+              generalSettings={generalSettings}
+              onRefreshWorkspace={refreshData}
+              onUpdateProduct={(p) => handleUpdateProduct(p)}
+              onOpenPdfImport={() => setShowPdfImportModal(true)}
+              onNavigateTab={(tab) => handleNavigateTab(tab)}
             />
           )}
         </div>
@@ -839,10 +1385,13 @@ const AppContent: React.FC = () => {
           <OrderFormModal
             key={editingOrder ? `${editingOrder.id}-${orderModalMode}` : 'new-order'}
             products={products}
+            categories={categories}
+            commissionConfig={commissionConfig}
+            generalSettings={generalSettings}
             salesReps={salesReps}
             customers={customers}
             currentRep={currentRep}
-            isAdmin={authUser.role === 'admin' || authUser.role === 'supervisor'}
+            isAdmin={authUser.role === 'owner' || authUser.role === 'admin' || authUser.role === 'supervisor'}
             editingOrder={editingOrder}
             formMode={editingOrder ? orderModalMode : 'create'}
             onClose={() => {
@@ -852,6 +1401,73 @@ const AppContent: React.FC = () => {
             }}
             onSaveOrder={editingOrder ? handleUpdateExistingOrder : handleSaveNewOrder}
           />
+        )}
+
+        {showPdfImportModal && canAccessOwnerConsole && (
+          <PdfPriceImportModal
+            categories={categories}
+            onClose={() => setShowPdfImportModal(false)}
+            onImported={refreshData}
+          />
+        )}
+
+        {showClaimOwnerModal && authUser.role === 'admin' && !hasOwnerAccount && (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-[850]" dir="rtl">
+            <div className="bg-white w-full max-w-md rounded-3xl p-6 sm:p-7 shadow-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="text-lg font-black text-[#072F5F] flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-amber-600" />
+                  تفعيل حساب المالك الرئيسي (لمرة واحدة)
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setShowClaimOwnerModal(false)}
+                  className="p-2 hover:bg-slate-100 rounded-xl"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-xs font-bold text-slate-600 leading-relaxed">
+                سيتم ترقية حسابك الحالي (@{authUser.username}) ليصبح المالك الرئيسي للنظام، وتعيين مفتاح استعادة آمن خاص بك. لا يمكن تكرار هذه الخطوة بعد إتمامها.
+              </p>
+              {claimError && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-2xl text-xs font-black">
+                  {claimError}
+                </div>
+              )}
+              <form onSubmit={(e) => void handleClaimInitialOwner(e)} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">كلمة مرورك الحالية</label>
+                  <input
+                    type="password"
+                    value={claimPassword}
+                    onChange={(e) => setClaimPassword(e.target.value)}
+                    placeholder="أكد كلمة مرور حسابك الحالية"
+                    className="w-full min-h-[44px] px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">مفتاح الاستعادة السري (8 أحرف فأكثر)</label>
+                  <input
+                    type="password"
+                    value={claimRecoveryKey}
+                    onChange={(e) => setClaimRecoveryKey(e.target.value)}
+                    placeholder="احفظ هذا المفتاح في مكان آمن"
+                    className="w-full min-h-[44px] px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm"
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={claimingOwner}
+                  className="w-full min-h-[48px] bg-amber-600 hover:bg-amber-700 text-white rounded-2xl font-black text-sm disabled:opacity-60"
+                >
+                  {claimingOwner ? 'جاري التفعيل...' : 'تأكيد وتفعيل المالك الرئيسي'}
+                </button>
+              </form>
+            </div>
+          </div>
         )}
 
         {selectedOrder && (() => {
@@ -866,6 +1482,10 @@ const AppContent: React.FC = () => {
                 setEditingOrder(selectedOrder);
                 setSelectedOrder(null);
               }}
+              canConfirm={canConfirmOrderAction(selectedOrder)}
+              onConfirmOrder={handleConfirmOrder}
+              canCancel={canCancelOrderAction(selectedOrder)}
+              onCancelOrder={handleCancelOrder}
               onClose={() => setSelectedOrder(null)}
             />
           );

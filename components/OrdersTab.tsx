@@ -1,10 +1,41 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ShoppingCart, Search, Printer, Trash2, CheckCircle2,
-  Clock, RotateCcw, Plus, Phone, MapPin,
-  AlertTriangle, X, Edit2, PackageCheck, Truck, FileEdit, Check
+  ShoppingCart,
+  Search,
+  Printer,
+  Trash2,
+  CheckCircle2,
+  Clock,
+  RotateCcw,
+  Plus,
+  Phone,
+  MapPin,
+  AlertTriangle,
+  X,
+  Edit2,
+  PackageCheck,
+  Truck,
+  FileEdit,
+  Check,
+  PauseCircle,
+  History,
+  ChevronDown,
+  ChevronUp,
+  XCircle,
 } from 'lucide-react';
-import { Order, OrderStatus, User } from '../types';
+import {
+  Order,
+  OrderReturnPrimaryReason,
+  OrderStatus,
+  User,
+} from '../types';
+import { apiClient, type OrderStatusTransitionPayload } from '../src/lib/api';
+import {
+  getSalesOrderDisplayState,
+  hasOrderPendingProcurement,
+  type SalesOrderDisplayState,
+} from '../src/lib/date-utils';
+import { UnifiedDateFilterBar, type DateFilterValue } from './UnifiedDateFilterBar';
 
 interface OrdersTabProps {
   orders: Order[];
@@ -13,19 +44,50 @@ interface OrdersTabProps {
   onOpenNewOrder: () => void;
   onSelectOrder: (order: Order) => void;
   onEditOrder: (order: Order, mode?: 'edit' | 'edit-request' | 'approve-override') => void;
-  onUpdateStatus: (orderId: string, status: OrderStatus) => void;
+  onConfirmOrder: (orderId: string) => Promise<void> | void;
+  onCancelOrder: (orderId: string, reason: string) => Promise<void> | void;
+  onUpdateStatus: (
+    orderId: string,
+    status: OrderStatus,
+    options?: OrderStatusTransitionPayload
+  ) => Promise<void> | void;
   onResolveEditRequest: (orderId: string, action: 'approve' | 'reject') => Promise<void> | void;
   onDeleteOrder: (orderId: string) => void;
 }
 
 const STATUS_BADGE_CLASS: Record<OrderStatus, string> = {
-  'قيد التنفيذ': 'bg-amber-100 text-amber-800',
+  'بانتظار تأكيد العميل': 'bg-slate-200 text-slate-800 border border-slate-300',
+  'طلب جديد': 'bg-sky-100 text-sky-900 border border-sky-200',
+  'بانتظار التجهيز': 'bg-amber-100 text-amber-900 border border-amber-200',
+  'جاري التجهيز': 'bg-yellow-100 text-yellow-900 border border-yellow-200',
   'تم التجهيز': 'bg-blue-100 text-[#072F5F] border border-blue-200',
   'تم الشحن': 'bg-indigo-100 text-indigo-800 border border-indigo-200',
-  'تم التسليم': 'bg-emerald-100 text-emerald-800',
-  'مرتجع': 'bg-orange-100 text-orange-800',
-  'ملغي': 'bg-red-100 text-red-800',
+  'تم التسليم': 'bg-emerald-100 text-emerald-800 border border-emerald-200',
+  'مرتجع': 'bg-orange-100 text-orange-800 border border-orange-200',
+  'رفض استلام': 'bg-rose-100 text-rose-800 border border-rose-200',
+  'ملغي': 'bg-red-100 text-red-800 border border-red-200',
+  'قيد التنفيذ': 'bg-amber-100 text-amber-800 border border-amber-200',
 };
+
+const DISPLAY_BADGE_CLASS: Record<SalesOrderDisplayState['badgeVariant'], string> = {
+  slate: 'bg-slate-200 text-slate-800 border border-slate-300',
+  sky: 'bg-sky-100 text-sky-900 border border-sky-200',
+  amber: 'bg-amber-100 text-amber-900 border border-amber-200',
+  yellow: 'bg-yellow-100 text-yellow-900 border border-yellow-200',
+  blue: 'bg-blue-100 text-[#072F5F] border border-blue-200',
+  indigo: 'bg-indigo-100 text-indigo-800 border border-indigo-200',
+  emerald: 'bg-emerald-100 text-emerald-800 border border-emerald-200',
+  orange: 'bg-orange-100 text-orange-800 border border-orange-200',
+  red: 'bg-red-100 text-red-800 border border-red-200',
+};
+
+const RETURN_REASONS: OrderReturnPrimaryReason[] = [
+  'رفض الاستلام',
+  'العميل لم يرد',
+  'العنوان غير صحيح',
+  'العميل طلب الإلغاء',
+  'سبب آخر',
+];
 
 export const OrdersTab: React.FC<OrdersTabProps> = ({
   orders,
@@ -34,18 +96,48 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
   onOpenNewOrder,
   onSelectOrder,
   onEditOrder,
+  onConfirmOrder,
+  onCancelOrder,
   onUpdateStatus,
   onResolveEditRequest,
-  onDeleteOrder
+  onDeleteOrder,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>(fixedStatus || 'الكل');
   const [onlyEditRequests, setOnlyEditRequests] = useState(false);
+  const [dateFilter, setDateFilter] = useState<DateFilterValue>({
+    preset: 'all',
+    dateType: 'createdAt',
+  });
+  const [queriedOrders, setQueriedOrders] = useState<Order[] | null>(null);
+  const [queriedRevenue, setQueriedRevenue] = useState<number | undefined>(undefined);
+  const [isQueryLoading, setIsQueryLoading] = useState(false);
+
   const [orderToDelete, setOrderToDelete] = useState<Order | null>(null);
   const [reviewingOrder, setReviewingOrder] = useState<Order | null>(null);
   const [isResolving, setIsResolving] = useState(false);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  const [confirmingOrderId, setConfirmingOrderId] = useState<string | null>(null);
+  const [cancelModalOrder, setCancelModalOrder] = useState<Order | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
 
-  const isStrictAdmin = currentUser.role === 'admin';
+  // Mandatory Return / Refusal Modal State (for canConfirmDelivery / supervisor / ops)
+  const [returnModal, setReturnModal] = useState<{
+    order: Order;
+    outcome: 'مرتجع' | 'رفض استلام';
+  } | null>(null);
+  const [returnReason, setReturnReason] = useState<OrderReturnPrimaryReason>('رفض الاستلام');
+  const [returnDetails, setReturnDetails] = useState('');
+  const [flagRefused, setFlagRefused] = useState(true);
+  const [flagNoAnswer, setFlagNoAnswer] = useState(false);
+  const [flagInvalidAddr, setFlagInvalidAddr] = useState(false);
+  const [flagCustCancel, setFlagCustCancel] = useState(false);
+  const [flagOther, setFlagOther] = useState(false);
+  const [returnError, setReturnError] = useState<string | null>(null);
+
+  const isStrictAdmin = currentUser.role === 'owner' || currentUser.role === 'admin';
   const canManageStatus = isStrictAdmin || Boolean(currentUser.canManageOrderStatus);
   const canConfirm =
     isStrictAdmin ||
@@ -54,25 +146,117 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
     Boolean(currentUser.canManageOrderStatus);
   const canDelete = isStrictAdmin || Boolean(currentUser.canDeleteOrders);
 
-  const pendingEditOrders = orders.filter(
-    (o) => Boolean(o.pendingEditRequest) && o.status === 'تم التجهيز'
+  const isDateFilterActive =
+    dateFilter.preset !== 'all' || Boolean(dateFilter.dateFrom) || Boolean(dateFilter.dateTo);
+
+  useEffect(() => {
+    if (!isDateFilterActive) {
+      setQueriedOrders(null);
+      setQueriedRevenue(undefined);
+      return;
+    }
+
+    let cancelled = false;
+    setIsQueryLoading(true);
+    apiClient
+      .queryOrders({
+        preset: dateFilter.preset,
+        dateType: dateFilter.dateType,
+        dateFrom: dateFilter.dateFrom,
+        dateTo: dateFilter.dateTo,
+        ...(fixedStatus ? { status: fixedStatus } : {}),
+      })
+      .then((res) => {
+        if (cancelled) return;
+        setQueriedOrders(res.orders);
+        setQueriedRevenue(res.stats.totalRevenue);
+      })
+      .catch((err) => {
+        console.error('Failed to query filtered orders:', err);
+      })
+      .finally(() => {
+        if (!cancelled) setIsQueryLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isDateFilterActive,
+    dateFilter.preset,
+    dateFilter.dateType,
+    dateFilter.dateFrom,
+    dateFilter.dateTo,
+    fixedStatus,
+    orders,
+  ]);
+
+  const effectiveOrders = useMemo(
+    () => (isDateFilterActive && queriedOrders ? queriedOrders : orders),
+    [isDateFilterActive, queriedOrders, orders]
   );
+
+  const pendingEditOrders = effectiveOrders.filter(
+    (o) =>
+      Boolean(o.pendingEditRequest) &&
+      (o.status === 'جاري التجهيز' || o.status === 'تم التجهيز')
+  );
+
+  const hasLegacyInProgress = effectiveOrders.some((o) => o.status === 'قيد التنفيذ');
+
+  const isOwnerOrElevated = (order: Order) =>
+    isStrictAdmin ||
+    currentUser.role === 'supervisor' ||
+    canManageStatus ||
+    !currentUser.salesRepId ||
+    order.salesRepId === currentUser.salesRepId;
 
   const getEditCapability = (order: Order): 'direct' | 'request' | 'none' => {
     if (isStrictAdmin) return 'direct';
-    if (order.status === 'قيد التنفيذ') return 'direct';
-    if (order.status === 'تم التجهيز') {
-      return canManageStatus ? 'direct' : 'request';
+    if (order.status === 'بانتظار تأكيد العميل') {
+      return isOwnerOrElevated(order) ? 'direct' : 'none';
+    }
+    if (
+      order.status === 'طلب جديد' ||
+      order.status === 'بانتظار التجهيز' ||
+      order.status === 'قيد التنفيذ'
+    ) {
+      return isOwnerOrElevated(order) ? 'direct' : 'none';
+    }
+    if (order.status === 'جاري التجهيز' || order.status === 'تم التجهيز') {
+      if (canManageStatus) return 'direct';
+      return isOwnerOrElevated(order) ? 'request' : 'none';
     }
     return 'none';
   };
 
-  const filteredOrders = orders.filter((order) => {
+  const canConfirmDraftOrder = (order: Order): boolean =>
+    order.status === 'بانتظار تأكيد العميل' && isOwnerOrElevated(order);
+
+  const canCancelOrder = (order: Order): boolean => {
+    if (order.status === 'بانتظار تأكيد العميل') {
+      return isOwnerOrElevated(order);
+    }
+    if (
+      order.status === 'طلب جديد' ||
+      order.status === 'بانتظار التجهيز' ||
+      order.status === 'جاري التجهيز' ||
+      order.status === 'تم التجهيز' ||
+      order.status === 'قيد التنفيذ'
+    ) {
+      return isStrictAdmin || canManageStatus;
+    }
+    return false;
+  };
+
+  const filteredOrders = effectiveOrders.filter((order) => {
+    const q = searchTerm.toLowerCase();
     const matchesSearch =
-      order.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      order.customerName.toLowerCase().includes(q) ||
       order.customerPhone.includes(searchTerm) ||
-      order.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.salesRepName.toLowerCase().includes(searchTerm.toLowerCase());
+      order.id.toLowerCase().includes(q) ||
+      order.salesRepName.toLowerCase().includes(q) ||
+      (order.governorate || '').toLowerCase().includes(q);
 
     if (fixedStatus) {
       if (order.status !== fixedStatus) return false;
@@ -83,12 +267,24 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
     }
 
     if (statusFilter === 'طلبات التعديل') {
-      return matchesSearch && Boolean(order.pendingEditRequest) && order.status === 'تم التجهيز';
+      return (
+        matchesSearch &&
+        Boolean(order.pendingEditRequest) &&
+        (order.status === 'جاري التجهيز' || order.status === 'تم التجهيز')
+      );
     }
 
     const matchesStatus = statusFilter === 'الكل' || order.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
+
+  const filteredRevenue = useMemo(
+    () =>
+      filteredOrders
+        .filter((o) => o.status !== 'ملغي' && o.status !== 'مرتجع' && o.status !== 'رفض استلام')
+        .reduce((sum, o) => sum + o.totalAmount, 0),
+    [filteredOrders]
+  );
 
   const handleConfirmDelete = () => {
     if (!orderToDelete) return;
@@ -107,10 +303,91 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
     }
   };
 
+  const openReturnModal = (order: Order, outcome: 'مرتجع' | 'رفض استلام') => {
+    setReturnModal({ order, outcome });
+    const defaultReason: OrderReturnPrimaryReason =
+      outcome === 'رفض استلام' ? 'رفض الاستلام' : 'سبب آخر';
+    setReturnReason(defaultReason);
+    setReturnDetails('');
+    setFlagRefused(outcome === 'رفض استلام');
+    setFlagNoAnswer(false);
+    setFlagInvalidAddr(false);
+    setFlagCustCancel(false);
+    setFlagOther(outcome === 'مرتجع');
+    setReturnError(null);
+  };
+
+  const handleConfirmReturn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!returnModal) return;
+    if (returnDetails.trim().length < 3) {
+      setReturnError('يجب كتابة ملاحظة تفصيلية واضحة (3 أحرف على الأقل).');
+      return;
+    }
+    setReturnError(null);
+    await onUpdateStatus(returnModal.order.id, returnModal.outcome, {
+      returnDetails: {
+        reason: returnReason,
+        details: returnDetails.trim(),
+        customerRefusedDelivery: flagRefused,
+        customerNoAnswer: flagNoAnswer,
+        invalidAddress: flagInvalidAddr,
+        customerRequestedCancel: flagCustCancel,
+        otherReason: flagOther,
+      },
+    });
+    setReturnModal(null);
+  };
+
+  const handleConfirmDraftClick = async (orderId: string) => {
+    setConfirmingOrderId(orderId);
+    try {
+      await onConfirmOrder(orderId);
+    } finally {
+      setConfirmingOrderId(null);
+    }
+  };
+
+  const handleSubmitCancel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancelModalOrder) return;
+    if (cancelReason.trim().length < 3) {
+      setCancelError('يجب كتابة سبب واضح للإلغاء (3 أحرف على الأقل).');
+      return;
+    }
+    setCancelError(null);
+    setIsCancelling(true);
+    try {
+      await onCancelOrder(cancelModalOrder.id, cancelReason.trim());
+      setCancelModalOrder(null);
+      setCancelReason('');
+    } catch (err: unknown) {
+      setCancelError(err instanceof Error ? err.message : 'تعذر إلغاء الفاتورة.');
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
   const showEditAlert =
     canManageStatus &&
     pendingEditOrders.length > 0 &&
     (!fixedStatus || fixedStatus === 'تم التجهيز');
+
+  const statusFilterTabs = [
+    'الكل',
+    'بانتظار تأكيد العميل',
+    'طلب جديد',
+    'بانتظار التجهيز',
+    'جاري التجهيز',
+    'تم التجهيز',
+    'تم الشحن',
+    'تم التسليم',
+    'مرتجع',
+    'رفض استلام',
+    'ملغي',
+    ...(hasLegacyInProgress ? ['قيد التنفيذ'] : []),
+    ...(canManageStatus && pendingEditOrders.length > 0 ? ['طلبات التعديل'] : []),
+  ];
 
   return (
     <div className="space-y-4 sm:space-y-6 animate-in fade-in duration-300 font-cairo">
@@ -126,7 +403,7 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
                 يوجد {pendingEditOrders.length} طلب تعديل فواتير بانتظار المراجعة والموافقة
               </p>
               <p className="text-xs font-bold text-slate-600 mt-0.5">
-                طلبات تعديل أو إضافة أصناف على فواتير في حالة "تم التجهيز"
+                طلبات تعديل أو إضافة أصناف على فواتير في مرحلة التجهيز
               </p>
             </div>
           </div>
@@ -148,6 +425,16 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
         </div>
       )}
 
+      {/* Unified Cairo Date Filter */}
+      <UnifiedDateFilterBar
+        value={dateFilter}
+        onChange={setDateFilter}
+        totalMatched={filteredOrders.length}
+        totalRevenue={isDateFilterActive ? queriedRevenue : filteredRevenue}
+        loading={isQueryLoading}
+        compact
+      />
+
       {/* Top Filter and Actions Bar */}
       <div className="bg-white p-4 sm:p-6 rounded-3xl sm:rounded-[2.5rem] shadow-sm border border-slate-200/80 flex flex-col gap-3.5">
         <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3">
@@ -158,7 +445,7 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="بحث باسم العميل، الهاتف، السيلز، أو رقم الفاتورة..."
+              placeholder="بحث باسم العميل، الهاتف، المحافظة، السيلز، أو رقم الفاتورة..."
               className="w-full min-h-[48px] pr-12 pl-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200/80 focus:border-[#0A468C] text-base sm:text-sm text-slate-900"
             />
           </div>
@@ -175,16 +462,7 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
         {/* Status Filter Tabs (Full view) or Sub-view indicator (Dedicated stage view) */}
         {!fixedStatus ? (
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-            {[
-              'الكل',
-              'قيد التنفيذ',
-              'تم التجهيز',
-              'تم الشحن',
-              'تم التسليم',
-              'مرتجع',
-              'ملغي',
-              ...(canManageStatus && pendingEditOrders.length > 0 ? ['طلبات التعديل'] : []),
-            ].map((status) => (
+            {statusFilterTabs.map((status) => (
               <button
                 key={status}
                 onClick={() => setStatusFilter(status)}
@@ -237,10 +515,9 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
       <div className="block lg:hidden space-y-3.5">
         {filteredOrders.map((order) => {
           const editCap = getEditCapability(order);
-          const isActivePending =
-            order.status === 'قيد التنفيذ' ||
-            order.status === 'تم التجهيز' ||
-            order.status === 'تم الشحن';
+          const canConfirmOutcomeOnOrder =
+            order.status === 'تم الشحن' || order.status === 'قيد التنفيذ';
+          const isHeld = Boolean(order.holdInfo?.isHeld);
 
           return (
             <div
@@ -249,50 +526,147 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
             >
               <div className="flex justify-between items-start gap-2">
                 <div>
-                  <span className="font-mono text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-lg">
-                    #{order.id.slice(0, 8)}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-mono text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-lg">
+                      #{order.id.slice(0, 10)}
+                    </span>
+                    {(order.version || 1) > 1 && (
+                      <span className="bg-amber-50 text-amber-900 border border-amber-200 px-2 py-0.5 rounded-lg text-[10px] font-black tabular-nums">
+                        v{order.version}
+                      </span>
+                    )}
+                  </div>
                   <h3 className="text-lg font-black text-slate-900 mt-1.5">{order.customerName}</h3>
                   <p className="text-xs text-slate-600 font-bold flex items-center gap-1.5 mt-0.5 tabular-nums">
                     <Phone className="w-3.5 h-3.5 text-[#0A468C]" />
                     <span dir="ltr">{order.customerPhone || 'بدون هاتف'}</span>
                   </p>
+                  {(order.governorate || order.customerAddress) && (
+                    <p className="text-xs text-slate-500 font-bold flex items-center gap-1 mt-0.5">
+                      <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                      <span>
+                        {order.governorate ? `${order.governorate} — ` : ''}
+                        {order.customerAddress}
+                      </span>
+                    </p>
+                  )}
                 </div>
 
-                <span
-                  className={`inline-flex items-center gap-1 px-3 py-1 rounded-xl text-xs font-black whitespace-nowrap ${
-                    STATUS_BADGE_CLASS[order.status]
-                  }`}
-                >
-                  {order.status === 'تم التسليم' && <CheckCircle2 className="w-3.5 h-3.5" />}
-                  {order.status === 'تم التجهيز' && <PackageCheck className="w-3.5 h-3.5" />}
-                  {order.status === 'تم الشحن' && <Truck className="w-3.5 h-3.5" />}
-                  {order.status === 'قيد التنفيذ' && <Clock className="w-3.5 h-3.5" />}
-                  {order.status}
-                </span>
+                {(() => {
+                  const display = getSalesOrderDisplayState(order);
+                  const pendingProc = hasOrderPendingProcurement(order);
+                  return (
+                    <div className="flex flex-col items-end gap-1">
+                      <span
+                        className={`inline-flex items-center gap-1 px-3 py-1 rounded-xl text-xs font-black whitespace-nowrap ${
+                          DISPLAY_BADGE_CLASS[display.badgeVariant]
+                        }`}
+                      >
+                        {order.status === 'تم التسليم' && <CheckCircle2 className="w-3.5 h-3.5" />}
+                        {order.status === 'تم التجهيز' && !display.isAwaitingReview && !display.isRePrepActive && (
+                          <PackageCheck className="w-3.5 h-3.5" />
+                        )}
+                        {order.status === 'تم الشحن' && <Truck className="w-3.5 h-3.5" />}
+                        {(display.isAwaitingReview || display.isRePrepActive) && (
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                        )}
+                        {!display.isAwaitingReview &&
+                          !display.isRePrepActive &&
+                          (order.status === 'قيد التنفيذ' ||
+                            order.status === 'طلب جديد' ||
+                            order.status === 'بانتظار التجهيز' ||
+                            order.status === 'بانتظار تأكيد العميل') && <Clock className="w-3.5 h-3.5" />}
+                        {display.primaryLabel}
+                      </span>
+                      {display.secondaryLabel && (
+                        <span className="text-[10px] font-black text-[#072F5F] bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-lg text-left">
+                          {display.secondaryLabel}
+                        </span>
+                      )}
+                      {order.status === 'بانتظار تأكيد العميل' && (
+                        <span className="text-[10px] font-black text-slate-600 bg-slate-100 px-2 py-0.5 rounded-lg">
+                          لم يُخصم المخزون بعد
+                        </span>
+                      )}
+                      {pendingProc && order.status !== 'ملغي' && order.status !== 'تم التسليم' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-black bg-amber-100 text-amber-950 border border-amber-300">
+                          توجد أصناف بانتظار التوفير
+                        </span>
+                      )}
+                      {isHeld && (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[11px] font-black bg-amber-100 text-amber-950 border border-amber-300">
+                          <PauseCircle className="w-3 h-3" />
+                          معلق
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
-              {/* Pending Edit Request Notice */}
-              {order.pendingEditRequest && order.status === 'تم التجهيز' && (
-                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3 flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-xs font-black text-[#072F5F]">
-                      يوجد طلب تعديل معلق
-                    </p>
-                    <p className="text-[11px] font-bold text-slate-600 truncate">
-                      مقدم من: {order.pendingEditRequest.requestedByName}
-                    </p>
-                  </div>
-                  {canManageStatus && (
-                    <button
-                      onClick={() => setReviewingOrder(order)}
-                      className="min-h-[38px] px-3 py-1.5 bg-[#0A468C] text-white rounded-xl text-xs font-black shrink-0"
-                    >
-                      مراجعة
-                    </button>
+              {order.status === 'ملغي' && order.cancellationInfo && (
+                <div className="bg-red-50 border border-red-200 rounded-2xl p-3 text-xs space-y-0.5">
+                  <p className="font-black text-red-900">سبب الإلغاء: {order.cancellationInfo.reason}</p>
+                  <p className="font-bold text-red-700 text-[11px]">
+                    بواسطة {order.cancellationInfo.cancelledByName} (مرحلة: {order.cancellationInfo.stageAtCancellation})
+                  </p>
+                </div>
+              )}
+
+              {/* Hold / Return / Shipping / Operational notes visibility */}
+              {isHeld && order.holdInfo && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 text-xs">
+                  <p className="font-black text-amber-950">سبب التعليق: {order.holdInfo.reason}</p>
+                  {order.holdInfo.notes && (
+                    <p className="font-bold text-amber-800 mt-0.5">{order.holdInfo.notes}</p>
                   )}
                 </div>
               )}
+
+              {order.returnInfo && (
+                <div className="bg-orange-50 border border-orange-200 rounded-2xl p-3 text-xs space-y-0.5">
+                  <p className="font-black text-orange-950">
+                    {order.returnInfo.outcome}: {order.returnInfo.reason}
+                  </p>
+                  <p className="font-bold text-slate-700">{order.returnInfo.details}</p>
+                </div>
+              )}
+
+              {order.shippingInfo && (
+                <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-3 text-xs text-indigo-950 font-bold">
+                  شحن: {order.shippingInfo.carrier || 'مندوب'}
+                  {order.shippingInfo.trackingNumber
+                    ? ` · بوليصة: ${order.shippingInfo.trackingNumber}`
+                    : ''}
+                </div>
+              )}
+
+              {order.operationalNotes && (
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xs text-slate-700 font-bold">
+                  ملاحظة التشغيل: {order.operationalNotes}
+                </div>
+              )}
+
+              {/* Pending Edit Request Notice */}
+              {order.pendingEditRequest &&
+                (order.status === 'جاري التجهيز' || order.status === 'تم التجهيز') && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-black text-[#072F5F]">يوجد طلب تعديل معلق</p>
+                      <p className="text-[11px] font-bold text-slate-600 truncate">
+                        مقدم من: {order.pendingEditRequest.requestedByName}
+                      </p>
+                    </div>
+                    {canManageStatus && (
+                      <button
+                        onClick={() => setReviewingOrder(order)}
+                        className="min-h-[38px] px-3 py-1.5 bg-[#0A468C] text-white rounded-xl text-xs font-black shrink-0"
+                      >
+                        مراجعة
+                      </button>
+                    )}
+                  </div>
+                )}
 
               {/* Items summary */}
               <div className="bg-slate-50 p-3.5 rounded-2xl text-xs space-y-1.5 border border-slate-200/60">
@@ -308,8 +682,77 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
                 </div>
               </div>
 
+              {((order.statusHistory && order.statusHistory.length > 0) ||
+                (order.revisions && order.revisions.length > 0)) && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpandedHistoryId((prev) => (prev === order.id ? null : order.id))
+                  }
+                  className="w-full min-h-[38px] px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-[#072F5F] flex items-center justify-between"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <History className="w-3.5 h-3.5" />
+                    السجل والمراجعات ({order.statusHistory?.length || 0} حالة · {order.revisions?.length || 0} تعديل)
+                  </span>
+                  {expandedHistoryId === order.id ? (
+                    <ChevronUp className="w-4 h-4" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4" />
+                  )}
+                </button>
+              )}
+
+              {expandedHistoryId === order.id && (
+                <div className="bg-slate-50 rounded-2xl p-3 border border-slate-200 space-y-2.5 text-[11px]">
+                  {order.revisions && order.revisions.length > 0 && (
+                    <div className="space-y-1.5">
+                      <p className="font-black text-[#0A468C]">تعديلات الفاتورة ({order.revisions.length})</p>
+                      {order.revisions.map((rev) => (
+                        <div key={rev.id} className="bg-white rounded-xl p-2 border border-slate-200 space-y-0.5">
+                          <p className="font-black text-slate-900">
+                            v{rev.fromVersion} ← v{rev.toVersion} ({rev.editedByName})
+                          </p>
+                          {rev.reason && <p className="font-bold text-slate-600">السبب: {rev.reason}</p>}
+                          <p className="font-bold text-[#072F5F] tabular-nums">
+                            الإجمالي: {rev.previousTotal.toLocaleString()} ← {rev.newTotal.toLocaleString()} ج.م
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {order.statusHistory && order.statusHistory.length > 0 && (
+                    <div className="space-y-1.5">
+                      <p className="font-black text-slate-700">تغييرات الحالة</p>
+                      {order.statusHistory.map((h, i) => (
+                        <div key={i} className="border-b last:border-b-0 border-slate-200 pb-1">
+                          <p className="font-black text-slate-900">
+                            {h.fromStatus ? `${h.fromStatus} ← ${h.toStatus}` : h.toStatus}
+                          </p>
+                          {h.note && <p className="font-bold text-slate-600">{h.note}</p>}
+                          <p className="font-bold text-slate-500">
+                            {h.changedByName} · {new Date(h.changedAt).toLocaleString('ar-EG')}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Action Buttons on Mobile */}
               <div className="flex flex-wrap items-center gap-2 pt-1">
+                {canConfirmDraftOrder(order) && (
+                  <button
+                    disabled={confirmingOrderId === order.id}
+                    onClick={() => void handleConfirmDraftClick(order.id)}
+                    className="w-full min-h-[44px] px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-60"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    {confirmingOrderId === order.id ? 'جاري التأكيد...' : 'تأكيد وإرسال للتجهيز'}
+                  </button>
+                )}
+
                 <button
                   onClick={() => onSelectOrder(order)}
                   className="flex-1 min-h-[44px] px-3 py-2.5 bg-blue-50 text-[#0A468C] hover:bg-[#0A468C] hover:text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5"
@@ -338,30 +781,9 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
                   </button>
                 )}
 
-                {canManageStatus && order.status === 'قيد التنفيذ' && (
+                {canConfirm && canConfirmOutcomeOnOrder && (
                   <button
-                    onClick={() => onUpdateStatus(order.id, 'تم التجهيز')}
-                    className="min-h-[44px] px-3.5 py-2.5 bg-blue-100 text-[#072F5F] hover:bg-[#0A468C] hover:text-white rounded-xl text-xs font-black transition-all flex items-center gap-1.5"
-                  >
-                    <PackageCheck className="w-4 h-4" />
-                    تجهيز
-                  </button>
-                )}
-
-                {canManageStatus &&
-                  (order.status === 'قيد التنفيذ' || order.status === 'تم التجهيز') && (
-                    <button
-                      onClick={() => onUpdateStatus(order.id, 'تم الشحن')}
-                      className="min-h-[44px] px-3.5 py-2.5 bg-indigo-100 text-indigo-800 hover:bg-indigo-600 hover:text-white rounded-xl text-xs font-black transition-all flex items-center gap-1.5"
-                    >
-                      <Truck className="w-4 h-4" />
-                      شحن
-                    </button>
-                  )}
-
-                {canConfirm && isActivePending && (
-                  <button
-                    onClick={() => onUpdateStatus(order.id, 'تم التسليم')}
+                    onClick={() => void onUpdateStatus(order.id, 'تم التسليم')}
                     className="min-h-[44px] px-4 py-2.5 bg-[#0A468C] text-white hover:bg-[#072F5F] rounded-xl text-xs font-black transition-all shadow-sm flex items-center gap-1.5"
                   >
                     <CheckCircle2 className="w-4 h-4" />
@@ -369,13 +791,29 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
                   </button>
                 )}
 
-                {canConfirm && isActivePending && (
+                {canConfirm && canConfirmOutcomeOnOrder && (
                   <button
-                    onClick={() => onUpdateStatus(order.id, 'مرتجع')}
-                    className="min-w-[44px] min-h-[44px] flex items-center justify-center bg-slate-100 text-slate-700 hover:bg-orange-50 hover:text-orange-600 rounded-xl transition-all"
+                    onClick={() => openReturnModal(order, 'مرتجع')}
+                    className="min-w-[44px] min-h-[44px] px-3 flex items-center justify-center gap-1 bg-orange-50 text-orange-800 border border-orange-200 hover:bg-orange-100 rounded-xl text-xs font-black transition-all"
                     title="تسجيل كمرتجع"
                   >
                     <RotateCcw className="w-4 h-4" />
+                    مرتجع
+                  </button>
+                )}
+
+                {canCancelOrder(order) && (
+                  <button
+                    onClick={() => {
+                      setCancelError(null);
+                      setCancelReason('');
+                      setCancelModalOrder(order);
+                    }}
+                    className="min-h-[44px] px-3 py-2 bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 rounded-xl text-xs font-black transition-all flex items-center gap-1"
+                    title="إلغاء الفاتورة"
+                  >
+                    <XCircle className="w-4 h-4" />
+                    إلغاء
                   </button>
                 )}
 
@@ -413,86 +851,175 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
             <tbody className="divide-y divide-slate-100">
               {filteredOrders.map((order) => {
                 const editCap = getEditCapability(order);
-                const isActivePending =
-                  order.status === 'قيد التنفيذ' ||
-                  order.status === 'تم التجهيز' ||
-                  order.status === 'تم الشحن';
+                const canConfirmOutcomeOnOrder =
+                  order.status === 'تم الشحن' || order.status === 'قيد التنفيذ';
+                const isHeld = Boolean(order.holdInfo?.isHeld);
 
                 return (
                   <tr key={order.id} className="hover:bg-blue-50/30 transition-all">
-                    <td className="p-5">
-                      <span className="font-mono text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg">
-                        #{order.id.slice(0, 8)}
-                      </span>
+                    <td className="p-5 align-top">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg">
+                          #{order.id.slice(0, 10)}
+                        </span>
+                        {(order.version || 1) > 1 && (
+                          <span className="bg-amber-50 text-amber-900 border border-amber-200 px-2 py-0.5 rounded-lg text-[10px] font-black tabular-nums">
+                            v{order.version}
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-slate-500 font-bold mt-1">
                         {new Date(order.createdAt).toLocaleDateString('ar-EG')}
                       </p>
                     </td>
 
-                    <td className="p-5">
+                    <td className="p-5 align-top space-y-1">
                       <p className="font-black text-[#072F5F] text-base">{order.customerName}</p>
-                      <p className="text-xs text-slate-600 font-bold flex items-center gap-1.5 mt-0.5 tabular-nums">
+                      <p className="text-xs text-slate-600 font-bold flex items-center gap-1.5 tabular-nums">
                         <Phone className="w-3.5 h-3.5 text-[#0A468C]" />
                         <span dir="ltr">{order.customerPhone || 'بدون هاتف'}</span>
                       </p>
-                      {order.customerAddress && (
-                        <p className="text-xs text-slate-500 font-bold flex items-center gap-1 mt-0.5">
+                      {(order.governorate || order.customerAddress) && (
+                        <p className="text-xs text-slate-500 font-bold flex items-center gap-1">
                           <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                          {order.customerAddress}
+                          <span>
+                            {order.governorate ? `${order.governorate} — ` : ''}
+                            {order.customerAddress}
+                          </span>
                         </p>
                       )}
-                      {order.pendingEditRequest && order.status === 'تم التجهيز' && (
-                        <div className="mt-1.5 inline-flex items-center gap-1.5 bg-blue-50 border border-blue-200 text-[#072F5F] px-2.5 py-1 rounded-lg text-[11px] font-black">
-                          <FileEdit className="w-3 h-3" />
-                          <span>طلب تعديل من {order.pendingEditRequest.requestedByName}</span>
-                          {canManageStatus && (
-                            <button
-                              onClick={() => setReviewingOrder(order)}
-                              className="underline text-[#0A468C] mr-1"
-                            >
-                              مراجعة
-                            </button>
-                          )}
-                        </div>
+                      {order.status === 'ملغي' && order.cancellationInfo && (
+                        <p className="text-[11px] font-bold text-red-800 bg-red-50 border border-red-200 rounded-lg px-2 py-1">
+                          سبب الإلغاء: {order.cancellationInfo.reason}
+                        </p>
                       )}
+                      {isHeld && order.holdInfo && (
+                        <p className="text-[11px] font-black text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 inline-block">
+                          معلق: {order.holdInfo.reason}
+                        </p>
+                      )}
+                      {order.returnInfo && (
+                        <p className="text-[11px] font-bold text-orange-900 bg-orange-50 border border-orange-200 rounded-lg px-2 py-1">
+                          {order.returnInfo.outcome} ({order.returnInfo.reason}): {order.returnInfo.details}
+                        </p>
+                      )}
+                      {order.operationalNotes && (
+                        <p className="text-[11px] font-bold text-slate-600">
+                          ملاحظة التشغيل: {order.operationalNotes}
+                        </p>
+                      )}
+                      {order.pendingEditRequest &&
+                        (order.status === 'جاري التجهيز' || order.status === 'تم التجهيز') && (
+                          <div className="mt-1 inline-flex items-center gap-1.5 bg-blue-50 border border-blue-200 text-[#072F5F] px-2.5 py-1 rounded-lg text-[11px] font-black">
+                            <FileEdit className="w-3 h-3" />
+                            <span>طلب تعديل من {order.pendingEditRequest.requestedByName}</span>
+                            {canManageStatus && (
+                              <button
+                                onClick={() => setReviewingOrder(order)}
+                                className="underline text-[#0A468C] mr-1"
+                              >
+                                مراجعة
+                              </button>
+                            )}
+                          </div>
+                        )}
                     </td>
 
-                    <td className="p-5 font-bold text-slate-700 text-sm">
+                    <td className="p-5 font-bold text-slate-700 text-sm align-top">
                       {order.salesRepName}
                     </td>
 
-                    <td className="p-5 text-center">
+                    <td className="p-5 text-center align-top">
                       <span className="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold tabular-nums">
                         {order.items.length} أصناف
                       </span>
                     </td>
 
-                    <td className="p-5 text-center font-black text-[#072F5F] text-base tabular-nums">
+                    <td className="p-5 text-center font-black text-[#072F5F] text-base tabular-nums align-top">
                       {order.totalAmount.toLocaleString()}{' '}
                       <span className="text-xs font-normal text-slate-500">ج.م</span>
                     </td>
 
-                    <td className="p-5 text-center font-bold text-[#0A468C] text-sm tabular-nums">
+                    <td className="p-5 text-center font-bold text-[#0A468C] text-sm tabular-nums align-top">
                       {order.commission.toLocaleString()}{' '}
                       <span className="text-xs font-normal text-slate-500">ج.م</span>
                     </td>
 
-                    <td className="p-5 text-center">
-                      <span
-                        className={`inline-flex items-center gap-1 px-3 py-1 rounded-xl text-xs font-black whitespace-nowrap ${
-                          STATUS_BADGE_CLASS[order.status]
-                        }`}
-                      >
-                        {order.status === 'تم التسليم' && <CheckCircle2 className="w-3.5 h-3.5" />}
-                        {order.status === 'تم التجهيز' && <PackageCheck className="w-3.5 h-3.5" />}
-                        {order.status === 'تم الشحن' && <Truck className="w-3.5 h-3.5" />}
-                        {order.status === 'قيد التنفيذ' && <Clock className="w-3.5 h-3.5" />}
-                        {order.status}
-                      </span>
+                    <td className="p-5 text-center align-top space-y-1">
+                      {(() => {
+                        const display = getSalesOrderDisplayState(order);
+                        const pendingProc = hasOrderPendingProcurement(order);
+                        return (
+                          <>
+                            <span
+                              className={`inline-flex items-center gap-1 px-3 py-1 rounded-xl text-xs font-black whitespace-nowrap ${
+                                DISPLAY_BADGE_CLASS[display.badgeVariant]
+                              }`}
+                            >
+                              {order.status === 'تم التسليم' && <CheckCircle2 className="w-3.5 h-3.5" />}
+                              {order.status === 'تم التجهيز' && !display.isAwaitingReview && !display.isRePrepActive && (
+                                <PackageCheck className="w-3.5 h-3.5" />
+                              )}
+                              {order.status === 'تم الشحن' && <Truck className="w-3.5 h-3.5" />}
+                              {(display.isAwaitingReview || display.isRePrepActive) && (
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                              )}
+                              {!display.isAwaitingReview &&
+                                !display.isRePrepActive &&
+                                (order.status === 'قيد التنفيذ' ||
+                                  order.status === 'طلب جديد' ||
+                                  order.status === 'بانتظار التجهيز' ||
+                                  order.status === 'بانتظار تأكيد العميل') && <Clock className="w-3.5 h-3.5" />}
+                              {display.primaryLabel}
+                            </span>
+                            {display.secondaryLabel && (
+                              <div>
+                                <span className="inline-block text-[10px] font-black text-[#072F5F] bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-lg">
+                                  {display.secondaryLabel}
+                                </span>
+                              </div>
+                            )}
+                            {order.status === 'بانتظار تأكيد العميل' && (
+                              <div>
+                                <span className="inline-block text-[10px] font-black text-slate-600 bg-slate-100 px-2 py-0.5 rounded-lg">
+                                  لم يُخصم المخزون بعد
+                                </span>
+                              </div>
+                            )}
+                            {pendingProc && order.status !== 'ملغي' && order.status !== 'تم التسليم' && (
+                              <div>
+                                <span className="inline-block text-[10px] font-black text-amber-950 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-lg">
+                                  توجد أصناف بانتظار التوفير
+                                </span>
+                              </div>
+                            )}
+                            {isHeld && (
+                              <div>
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-black bg-amber-100 text-amber-950 border border-amber-300">
+                                  <PauseCircle className="w-3 h-3" />
+                                  معلق
+                                </span>
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </td>
 
-                    <td className="p-5 text-center">
+                    <td className="p-5 text-center align-top">
                       <div className="flex items-center justify-center flex-wrap gap-1.5">
+                        {canConfirmDraftOrder(order) && (
+                          <button
+                            disabled={confirmingOrderId === order.id}
+                            onClick={() => void handleConfirmDraftClick(order.id)}
+                            title="تأكيد الطلب وإرساله للتجهيز وخصم المخزون"
+                            className="px-3 py-2 bg-emerald-600 text-white hover:bg-emerald-700 rounded-xl text-xs font-black transition-all shadow-xs flex items-center gap-1 disabled:opacity-60"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            {confirmingOrderId === order.id ? 'جاري التأكيد...' : 'تأكيد وإرسال للتجهيز'}
+                          </button>
+                        )}
+
                         <button
                           onClick={() => onSelectOrder(order)}
                           title="طباعة / عرض الفاتورة"
@@ -514,7 +1041,7 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
                         {editCap === 'request' && (
                           <button
                             onClick={() => onEditOrder(order, 'edit-request')}
-                            title="إرسال طلب تعديل لمسؤول الطلبات"
+                            title="إرسال طلب تعديل لمسؤول التجهيز والشحن"
                             className="px-2.5 py-2 bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 rounded-xl text-xs font-black transition-all flex items-center gap-1"
                           >
                             <FileEdit className="w-3.5 h-3.5" />
@@ -522,43 +1049,22 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
                           </button>
                         )}
 
-                        {canManageStatus && order.pendingEditRequest && order.status === 'تم التجهيز' && (
-                          <button
-                            onClick={() => setReviewingOrder(order)}
-                            title="مراجعة والموافقة على طلب التعديل"
-                            className="px-2.5 py-2 bg-[#072F5F] text-white hover:bg-[#0A468C] rounded-xl text-xs font-black transition-all flex items-center gap-1"
-                          >
-                            <FileEdit className="w-3.5 h-3.5" />
-                            مراجعة
-                          </button>
-                        )}
-
-                        {canManageStatus && order.status === 'قيد التنفيذ' && (
-                          <button
-                            onClick={() => onUpdateStatus(order.id, 'تم التجهيز')}
-                            title="تحديث الحالة إلى تم التجهيز"
-                            className="px-2.5 py-2 bg-blue-100 text-[#072F5F] hover:bg-[#0A468C] hover:text-white rounded-xl text-xs font-black transition-all flex items-center gap-1"
-                          >
-                            <PackageCheck className="w-3.5 h-3.5" />
-                            تجهيز
-                          </button>
-                        )}
-
                         {canManageStatus &&
-                          (order.status === 'قيد التنفيذ' || order.status === 'تم التجهيز') && (
+                          order.pendingEditRequest &&
+                          (order.status === 'جاري التجهيز' || order.status === 'تم التجهيز') && (
                             <button
-                              onClick={() => onUpdateStatus(order.id, 'تم الشحن')}
-                              title="تحديث الحالة إلى تم الشحن"
-                              className="px-2.5 py-2 bg-indigo-100 text-indigo-800 hover:bg-indigo-600 hover:text-white rounded-xl text-xs font-black transition-all flex items-center gap-1"
+                              onClick={() => setReviewingOrder(order)}
+                              title="مراجعة والموافقة على طلب التعديل"
+                              className="px-2.5 py-2 bg-[#072F5F] text-white hover:bg-[#0A468C] rounded-xl text-xs font-black transition-all flex items-center gap-1"
                             >
-                              <Truck className="w-3.5 h-3.5" />
-                              شحن
+                              <FileEdit className="w-3.5 h-3.5" />
+                              مراجعة
                             </button>
                           )}
 
-                        {canConfirm && isActivePending && (
+                        {canConfirm && canConfirmOutcomeOnOrder && (
                           <button
-                            onClick={() => onUpdateStatus(order.id, 'تم التسليم')}
+                            onClick={() => void onUpdateStatus(order.id, 'تم التسليم')}
                             title="تأكيد التسليم"
                             className="px-3 py-2 bg-[#0A468C] text-white hover:bg-[#072F5F] rounded-xl text-xs font-black transition-all shadow-xs flex items-center gap-1"
                           >
@@ -567,13 +1073,27 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
                           </button>
                         )}
 
-                        {canConfirm && isActivePending && (
+                        {canConfirm && canConfirmOutcomeOnOrder && (
                           <button
-                            onClick={() => onUpdateStatus(order.id, 'مرتجع')}
+                            onClick={() => openReturnModal(order, 'مرتجع')}
                             title="تسجيل كمرتجع"
                             className="p-2.5 bg-slate-100 text-slate-600 hover:bg-orange-50 hover:text-orange-600 rounded-xl transition-all"
                           >
                             <RotateCcw className="w-4 h-4" />
+                          </button>
+                        )}
+
+                        {canCancelOrder(order) && (
+                          <button
+                            onClick={() => {
+                              setCancelError(null);
+                              setCancelReason('');
+                              setCancelModalOrder(order);
+                            }}
+                            title="إلغاء الفاتورة مع حفظ السجل"
+                            className="p-2.5 bg-red-50 text-red-700 hover:bg-red-600 hover:text-white rounded-xl transition-all shadow-xs"
+                          >
+                            <XCircle className="w-4 h-4" />
                           </button>
                         )}
 
@@ -611,6 +1131,133 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
         </div>
       )}
 
+      {/* Mandatory Return / Refusal Modal */}
+      {returnModal && (
+        <div
+          className="fixed inset-0 bg-[#072F5F]/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-[745] font-cairo"
+          dir="rtl"
+        >
+          <form
+            onSubmit={(e) => void handleConfirmReturn(e)}
+            className="bg-white w-full max-w-xl rounded-t-3xl sm:rounded-[2.5rem] p-5 sm:p-7 pb-safe shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto animate-in slide-in-from-bottom sm:zoom-in-95 duration-200"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-lg font-black text-[#072F5F]">
+                  تسجيل "{returnModal.outcome}" — فاتورة #{returnModal.order.id}
+                </h3>
+                <p className="text-xs font-bold text-slate-500 mt-0.5">
+                  العميل: {returnModal.order.customerName}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReturnModal(null)}
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center hover:bg-slate-100 rounded-xl"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {returnError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-2xl text-xs font-black">
+                {returnError}
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2">
+              {(['مرتجع', 'رفض استلام'] as const).map((out) => (
+                <button
+                  key={out}
+                  type="button"
+                  onClick={() => setReturnModal({ order: returnModal.order, outcome: out })}
+                  className={`min-h-[42px] rounded-xl text-xs font-black border ${
+                    returnModal.outcome === out
+                      ? 'bg-orange-600 text-white border-orange-600'
+                      : 'bg-slate-50 text-slate-700 border-slate-200'
+                  }`}
+                >
+                  {out}
+                </button>
+              ))}
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-xs font-black text-slate-800">السبب الرئيسي *</label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {RETURN_REASONS.map((reason) => (
+                  <button
+                    key={reason}
+                    type="button"
+                    onClick={() => setReturnReason(reason)}
+                    className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-black border ${
+                      returnReason === reason
+                        ? 'bg-[#0A468C] text-white border-[#0A468C]'
+                        : 'bg-slate-50 text-slate-700 border-slate-200'
+                    }`}
+                  >
+                    {reason}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-bold text-slate-800 bg-slate-50 p-3 rounded-2xl border border-slate-200">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={flagRefused} onChange={(e) => setFlagRefused(e.target.checked)} className="w-4 h-4 accent-[#0A468C]" />
+                <span>هل العميل رفض الاستلام؟</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={flagNoAnswer} onChange={(e) => setFlagNoAnswer(e.target.checked)} className="w-4 h-4 accent-[#0A468C]" />
+                <span>هل العميل لم يرد؟</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={flagInvalidAddr} onChange={(e) => setFlagInvalidAddr(e.target.checked)} className="w-4 h-4 accent-[#0A468C]" />
+                <span>هل العنوان غير صحيح؟</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={flagCustCancel} onChange={(e) => setFlagCustCancel(e.target.checked)} className="w-4 h-4 accent-[#0A468C]" />
+                <span>هل العميل طلب الإلغاء؟</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={flagOther} onChange={(e) => setFlagOther(e.target.checked)} className="w-4 h-4 accent-[#0A468C]" />
+                <span>سبب آخر</span>
+              </label>
+            </div>
+
+            <div>
+              <label className="block text-xs font-black text-slate-800 mb-1">
+                ملاحظة تفصيلية (إلزامي) *
+              </label>
+              <textarea
+                rows={3}
+                required
+                value={returnDetails}
+                onChange={(e) => setReturnDetails(e.target.value)}
+                placeholder="اكتب سبب المرتجع أو رفض الاستلام بالتفصيل..."
+                className="w-full px-4 py-2.5 bg-slate-50 rounded-2xl border border-slate-200 focus:border-[#0A468C] outline-none font-bold text-sm"
+              />
+            </div>
+
+            <div className="flex gap-2.5">
+              <button
+                type="submit"
+                className="flex-1 min-h-[48px] py-3 bg-orange-600 hover:bg-orange-700 text-white rounded-2xl font-black text-sm"
+              >
+                حفظ وتسجيل "{returnModal.outcome}"
+              </button>
+              <button
+                type="button"
+                onClick={() => setReturnModal(null)}
+                className="min-h-[48px] px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl font-bold text-sm"
+              >
+                إلغاء
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Review Edit Request Modal */}
       {reviewingOrder && reviewingOrder.pendingEditRequest && (
         <div
@@ -643,7 +1290,6 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
               </div>
             )}
 
-            {/* Comparison Summary */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-1.5">
                 <span className="font-black text-slate-500 block">الفاتورة الحالية</span>
@@ -670,7 +1316,6 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
               </div>
             </div>
 
-            {/* Requested Items */}
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-2">
               <p className="text-xs font-black text-[#072F5F]">الأصناف في التعديل المطلوب:</p>
               <div className="space-y-1.5 max-h-48 overflow-y-auto">
@@ -682,12 +1327,14 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
                     <div className="min-w-0">
                       <p className="font-black text-slate-900 truncate">{item.productName}</p>
                       <p className="text-[11px] font-bold text-[#0A468C]">
+                        {item.productCode ? `#${item.productCode} · ` : ''}
+                        {item.categoryName ? `${item.categoryName} · ` : ''}
                         {item.grade}
                         {item.isCustom ? ' · صنف جديد/مخصوص' : ''}
                       </p>
                     </div>
                     <span className="font-black text-[#072F5F] tabular-nums whitespace-nowrap">
-                      {item.quantity.toLocaleString()} mg × {item.price} ={' '}
+                      {item.quantity.toLocaleString()} {item.unit || 'mg'} × {item.price} ={' '}
                       {(item.quantity * item.price).toLocaleString()} ج.م
                     </span>
                   </div>
@@ -695,7 +1342,6 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
               </div>
             </div>
 
-            {/* Action Buttons */}
             <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
               <button
                 disabled={isResolving}
@@ -731,6 +1377,74 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
         </div>
       )}
 
+      {/* Cancel Order Confirmation Modal (Non-destructive) */}
+      {cancelModalOrder && (
+        <div
+          className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-[750] font-cairo"
+          dir="rtl"
+        >
+          <form
+            onSubmit={(e) => void handleSubmitCancel(e)}
+            className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-[2.5rem] p-6 sm:p-7 pb-safe shadow-2xl space-y-4 animate-in slide-in-from-bottom sm:zoom-in-95 duration-200"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-lg font-black text-red-700 flex items-center gap-2">
+                <XCircle className="w-5 h-5" />
+                إلغاء الفاتورة #{cancelModalOrder.id}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setCancelModalOrder(null)}
+                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {cancelError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-2xl text-xs font-black">
+                {cancelError}
+              </div>
+            )}
+
+            <p className="text-xs text-slate-600 font-bold leading-relaxed">
+              تتحول الفاتورة للعميل <span className="text-[#072F5F] font-black">"{cancelModalOrder.customerName}"</span> إلى حالة "ملغي" وتظل محفوظة في السجل للتدقيق.
+            </p>
+
+            <div>
+              <label className="block text-xs font-black text-slate-800 mb-1.5">
+                سبب الإلغاء (إلزامي) *
+              </label>
+              <textarea
+                rows={3}
+                required
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                placeholder="اكتب سبب الإلغاء بوضوح..."
+                className="w-full px-3.5 py-2.5 bg-slate-50 rounded-2xl border border-slate-200 focus:border-red-500 outline-none font-bold text-sm"
+              />
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button
+                type="submit"
+                disabled={isCancelling}
+                className="flex-1 min-h-[48px] py-3 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-sm transition-all shadow-md disabled:opacity-60"
+              >
+                {isCancelling ? 'جاري الإلغاء...' : 'تأكيد الإلغاء'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCancelModalOrder(null)}
+                className="min-h-[48px] px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl font-bold text-sm transition-all"
+              >
+                تراجع
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Delete Order Confirmation Dialog */}
       {orderToDelete && (
         <div
@@ -750,7 +1464,9 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
                 (مبلغ {orderToDelete.totalAmount.toLocaleString()} ج.م)؟
               </p>
               <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 font-bold text-right">
-                سيتم تلقائياً إعادة كميات الزيوت إلى المستودع وإلغاء العمولة المسجلة للسيلز.
+                {orderToDelete.status === 'بانتظار تأكيد العميل'
+                  ? 'هذه الفاتورة مسودة لم يتم تأكيدها بعد — لن يتأثر المخزون أو العمولات عند حذفها.'
+                  : 'سيتم تلقائياً إعادة كميات الزيوت إلى المستودع وإلغاء العمولة المسجلة للسيلز.'}
               </div>
             </div>
 

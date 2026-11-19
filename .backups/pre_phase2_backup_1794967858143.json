@@ -1,0 +1,1362 @@
+{
+  "createdAt": "2026-11-18T02:10:57.786Z",
+  "counts": {
+    "users": 0,
+    "teamMembers": 4,
+    "salesReps": 3,
+    "customers": 7,
+    "products": 6,
+    "orders": 10,
+    "orderRevisions": 1,
+    "stockMovements": 2,
+    "chatMessages": 2,
+    "auditLogs": 19
+  },
+  "data": {
+    "users": [],
+    "teamMembers": [
+      {
+        "id": "u1",
+        "name": "المدير العام",
+        "nickname": "الكبير",
+        "avatar": null,
+        "username": "admin",
+        "passwordHash": "d103af6aa6348b60c62efcc8358e1cd0:a15bcbd35a5a623e27cd0364bd6a9e54c93c85632abc2d94d7af7b68a2201374bbaa712f0a21b9c44f795a034ff7013e3f5e926941d3a9e3755f79860980bd3b",
+        "role": "admin",
+        "salesRepId": null,
+        "isSuspended": false,
+        "isMuted": false,
+        "canEditInventory": true,
+        "canConfirmDelivery": true,
+        "canManageOrderStatus": false,
+        "canDeleteOrders": true,
+        "canDeleteCustomers": true,
+        "address": "القاهرة، مصر",
+        "startDate": "2023-01-01",
+        "online": true
+      },
+      {
+        "id": "u2",
+        "name": "أحمد علي",
+        "nickname": "أبو حميد",
+        "avatar": null,
+        "username": "ahmed",
+        "passwordHash": "d103af6aa6348b60c62efcc8358e1cd0:a15bcbd35a5a623e27cd0364bd6a9e54c93c85632abc2d94d7af7b68a2201374bbaa712f0a21b9c44f795a034ff7013e3f5e926941d3a9e3755f79860980bd3b",
+        "role": "sales",
+        "salesRepId": "s1",
+        "isSuspended": false,
+        "isMuted": false,
+        "canEditInventory": false,
+        "canConfirmDelivery": false,
+        "canManageOrderStatus": false,
+        "canDeleteOrders": false,
+        "canDeleteCustomers": false,
+        "address": "الجيزة، مصر",
+        "startDate": "2023-05-15",
+        "online": true
+      },
+      {
+        "id": "u3",
+        "name": "سارة محمود",
+        "nickname": null,
+        "avatar": null,
+        "username": "sara",
+        "passwordHash": "d103af6aa6348b60c62efcc8358e1cd0:a15bcbd35a5a623e27cd0364bd6a9e54c93c85632abc2d94d7af7b68a2201374bbaa712f0a21b9c44f795a034ff7013e3f5e926941d3a9e3755f79860980bd3b",
+        "role": "sales",
+        "salesRepId": "s2",
+        "isSuspended": false,
+        "isMuted": false,
+        "canEditInventory": true,
+        "canConfirmDelivery": false,
+        "canManageOrderStatus": false,
+        "canDeleteOrders": false,
+        "canDeleteCustomers": false,
+        "address": "الإسكندرية، مصر",
+        "startDate": "2023-06-10",
+        "online": false
+      },
+      {
+        "id": "u-1794955139139",
+        "name": "donia",
+        "nickname": null,
+        "avatar": null,
+        "username": "donia",
+        "passwordHash": "026221ad1cb49a6f2b71aee8a5e7a496:ea86b5dad61798e91ba05b866491b08ee9aa2062e2d3f47a7dfe6280ae8bfe4b7de20ce64afce75aabfb2009111489b834409f81935a20dda8132e7b5d48e3c4",
+        "role": "sales",
+        "salesRepId": "s-1794955139139",
+        "isSuspended": false,
+        "isMuted": false,
+        "canEditInventory": false,
+        "canConfirmDelivery": false,
+        "canManageOrderStatus": false,
+        "canDeleteOrders": false,
+        "canDeleteCustomers": false,
+        "address": null,
+        "startDate": "2026-11-17T22:38:58.194Z",
+        "online": true
+      }
+    ],
+    "salesReps": [
+      {
+        "id": "s-1794955139139",
+        "userId": "u-1794955139139",
+        "name": "donia",
+        "totalCommission": 14.5,
+        "pendingCommission": 927,
+        "ordersCount": 2,
+        "maxDiscountAllowed": 1,
+        "customCommissionRate": 0.02,
+        "monthlyHistory": []
+      },
+      {
+        "id": "s1",
+        "userId": "u2",
+        "name": "أحمد علي",
+        "totalCommission": 251.86,
+        "pendingCommission": 562.5,
+        "ordersCount": 3,
+        "maxDiscountAllowed": 5,
+        "customCommissionRate": 0.05,
+        "monthlyHistory": []
+      },
+      {
+        "id": "s2",
+        "userId": "u3",
+        "name": "سارة محمود",
+        "totalCommission": 0,
+        "pendingCommission": 1062,
+        "ordersCount": 3,
+        "maxDiscountAllowed": 7,
+        "customCommissionRate": 0.06,
+        "monthlyHistory": []
+      }
+    ],
+    "customers": [
+      {
+        "id": "c-1794776608857",
+        "name": "ابراهيم تيست",
+        "phone": "0122233456",
+        "address": "الاسكندرية سيدى بشر",
+        "totalSpent": 8084,
+        "classification": "فضي",
+        "lastOrderDate": "2026-11-15T21:03:28.835Z",
+        "returnHistory": []
+      },
+      {
+        "id": "c1",
+        "name": "شركة النور للعطور",
+        "phone": "0123456789",
+        "address": null,
+        "totalSpent": 5087.2,
+        "classification": "فضي",
+        "lastOrderDate": "2026-11-15T21:14:15.237Z",
+        "returnHistory": []
+      },
+      {
+        "id": "c-1794778437903",
+        "name": "sssss",
+        "phone": "11111",
+        "address": "sssss",
+        "totalSpent": 4900,
+        "classification": "عادي",
+        "lastOrderDate": "2026-11-15T21:33:57.847Z",
+        "returnHistory": []
+      },
+      {
+        "id": "c-1794954953990",
+        "name": "ابراهم تيست 2",
+        "phone": "01234567",
+        "address": "الاسكندرية سيدى بشر",
+        "totalSpent": 4900,
+        "classification": "عادي",
+        "lastOrderDate": "2026-11-17T22:35:53.964Z",
+        "returnHistory": []
+      },
+      {
+        "id": "c-1794962115415",
+        "name": "jdsj",
+        "phone": "2234234",
+        "address": "sdfsfd",
+        "totalSpent": 3800,
+        "classification": "عادي",
+        "lastOrderDate": "2026-11-18T00:35:15.377Z",
+        "returnHistory": []
+      },
+      {
+        "id": "c-1794955240454",
+        "name": "عميل دونيا",
+        "phone": "123456789",
+        "address": "الاسكندرية سيدى بشر",
+        "totalSpent": 46400,
+        "classification": "ذهبي",
+        "lastOrderDate": "2026-11-17T22:40:40.412Z",
+        "returnHistory": []
+      },
+      {
+        "id": "c-1794774575830",
+        "name": "sadasd",
+        "phone": "213123",
+        "address": "dfsdfsdf",
+        "totalSpent": 8325,
+        "classification": "فضي",
+        "lastOrderDate": "2026-11-18T00:53:21.728Z",
+        "returnHistory": []
+      }
+    ],
+    "products": [
+      {
+        "id": "2",
+        "name": "زيت لافندر فرنسي",
+        "grade": "وسط (Code B)",
+        "pricePerMg": 10,
+        "stock": 12900
+      },
+      {
+        "id": "1",
+        "name": "زيت لافندر فرنسي",
+        "grade": "عالي (Code A)",
+        "pricePerMg": 15,
+        "stock": 8750
+      },
+      {
+        "id": "p-1794777255255-0-56",
+        "name": "بكرات روج",
+        "grade": "وسط (Code B)",
+        "pricePerMg": 9.7,
+        "stock": 0
+      },
+      {
+        "id": "p-1794777255263-1-500",
+        "name": "سلفر سنت",
+        "grade": "وسط (Code B)",
+        "pricePerMg": 5.8,
+        "stock": 0
+      },
+      {
+        "id": "3",
+        "name": "زيت عود ملكي",
+        "grade": "عالي (Code A)",
+        "pricePerMg": 45,
+        "stock": 4500
+      },
+      {
+        "id": "4",
+        "name": "زيت ياسمين طبيعي",
+        "grade": "تجاري (Code C)",
+        "pricePerMg": 8,
+        "stock": 19500
+      }
+    ],
+    "orders": [
+      {
+        "id": "ORD-255237",
+        "customerName": "محمود كيما",
+        "customerPhone": "0123456789",
+        "customerAddress": "الاسكندرية سيدى بشكر كفر الدوار",
+        "governorate": null,
+        "customerNotes": "",
+        "operationalNotes": null,
+        "salesRepId": "s1",
+        "salesRepName": "أحمد علي",
+        "items": [
+          {
+            "grade": "وسط (Code B)",
+            "price": 9.7,
+            "isCustom": true,
+            "quantity": 500,
+            "productName": "بكرات روج"
+          },
+          {
+            "grade": "وسط (Code B)",
+            "price": 5.8,
+            "isCustom": true,
+            "quantity": 50,
+            "productName": "سلفر سنت"
+          }
+        ],
+        "subtotal": 5140,
+        "discountPercentage": 2,
+        "discountAmount": 102.8,
+        "shippingCost": 50,
+        "totalAmount": 5087.2,
+        "status": "تم التسليم",
+        "createdAt": "2026-11-15T21:14:15.237Z",
+        "commission": 251.86,
+        "version": 1,
+        "confirmedAt": null,
+        "confirmedById": null,
+        "confirmedByName": null,
+        "prepStartedAt": "2026-11-15T21:14:15.237Z",
+        "prepCompletedAt": "2026-11-15T21:14:15.237Z",
+        "shippedAt": "2026-11-15T21:14:15.237Z",
+        "deliveredAt": "2026-11-15T21:14:15.237Z",
+        "cancelledAt": null,
+        "returnedAt": null,
+        "pendingEditRequest": null,
+        "statusHistory": [],
+        "shippingInfo": null,
+        "deliveryInfo": null,
+        "returnInfo": null,
+        "holdInfo": null,
+        "revisionAlert": null,
+        "cancellationInfo": null
+      },
+      {
+        "id": "ord-1001",
+        "customerName": "شركة النور للعطور",
+        "customerPhone": "0123456789",
+        "customerAddress": "وسط البلد، القاهرة",
+        "governorate": null,
+        "customerNotes": "تسليم في أسرع وقت مع عينات جديدة",
+        "operationalNotes": null,
+        "salesRepId": "s1",
+        "salesRepName": "أحمد علي",
+        "items": [
+          {
+            "grade": "عالي (Code A)",
+            "price": 45,
+            "quantity": 200,
+            "productName": "زيت عود ملكي"
+          },
+          {
+            "grade": "عالي (Code A)",
+            "price": 15,
+            "quantity": 300,
+            "productName": "زيت لافندر فرنسي"
+          }
+        ],
+        "subtotal": 13500,
+        "discountPercentage": 5,
+        "discountAmount": 675,
+        "shippingCost": 100,
+        "totalAmount": 12925,
+        "status": "تم التسليم",
+        "createdAt": "2026-11-13T19:46:19.603Z",
+        "commission": 646.25,
+        "version": 1,
+        "confirmedAt": null,
+        "confirmedById": null,
+        "confirmedByName": null,
+        "prepStartedAt": "2026-11-13T19:46:19.603Z",
+        "prepCompletedAt": "2026-11-13T19:46:19.603Z",
+        "shippedAt": "2026-11-13T19:46:19.603Z",
+        "deliveredAt": "2026-11-13T19:46:19.603Z",
+        "cancelledAt": null,
+        "returnedAt": null,
+        "pendingEditRequest": null,
+        "statusHistory": [],
+        "shippingInfo": null,
+        "deliveryInfo": null,
+        "returnInfo": null,
+        "holdInfo": null,
+        "revisionAlert": null,
+        "cancellationInfo": null
+      },
+      {
+        "id": "ORD-608835",
+        "customerName": "ابراهيم تيست",
+        "customerPhone": "0122233456",
+        "customerAddress": "الاسكندرية سيدى بشر",
+        "governorate": null,
+        "customerNotes": "",
+        "operationalNotes": null,
+        "salesRepId": "s2",
+        "salesRepName": "سارة محمود",
+        "items": [
+          {
+            "grade": "تجاري (Code C)",
+            "price": 8,
+            "quantity": 250,
+            "productName": "زيت ياسمين طبيعي"
+          },
+          {
+            "grade": "وسط (Code B)",
+            "price": 10,
+            "quantity": 600,
+            "productName": "زيت لافندر فرنسي"
+          }
+        ],
+        "subtotal": 8000,
+        "discountPercentage": 0,
+        "discountAmount": 0,
+        "shippingCost": 84,
+        "totalAmount": 8084,
+        "status": "قيد التنفيذ",
+        "createdAt": "2026-11-15T21:03:28.835Z",
+        "commission": 480,
+        "version": 1,
+        "confirmedAt": null,
+        "confirmedById": null,
+        "confirmedByName": null,
+        "prepStartedAt": "2026-11-15T21:03:28.835Z",
+        "prepCompletedAt": null,
+        "shippedAt": null,
+        "deliveredAt": null,
+        "cancelledAt": null,
+        "returnedAt": null,
+        "pendingEditRequest": null,
+        "statusHistory": [],
+        "shippingInfo": null,
+        "deliveryInfo": null,
+        "returnInfo": null,
+        "holdInfo": null,
+        "revisionAlert": null,
+        "cancellationInfo": null
+      },
+      {
+        "id": "ORD-437847",
+        "customerName": "sssss",
+        "customerPhone": "11111",
+        "customerAddress": "sssss",
+        "governorate": null,
+        "customerNotes": "",
+        "operationalNotes": null,
+        "salesRepId": "s2",
+        "salesRepName": "سارة محمود",
+        "items": [
+          {
+            "grade": "وسط (Code B)",
+            "price": 9.7,
+            "quantity": 500,
+            "productName": "بكرات روج"
+          }
+        ],
+        "subtotal": 4850,
+        "discountPercentage": 0,
+        "discountAmount": 0,
+        "shippingCost": 50,
+        "totalAmount": 4900,
+        "status": "جاري التجهيز",
+        "createdAt": "2026-11-15T21:33:57.847Z",
+        "commission": 291,
+        "version": 1,
+        "confirmedAt": null,
+        "confirmedById": null,
+        "confirmedByName": null,
+        "prepStartedAt": "2026-11-18T00:55:52.159Z",
+        "prepCompletedAt": null,
+        "shippedAt": null,
+        "deliveredAt": null,
+        "cancelledAt": null,
+        "returnedAt": null,
+        "pendingEditRequest": null,
+        "statusHistory": [
+          {
+            "toStatus": "جاري التجهيز",
+            "changedAt": "2026-11-18T00:55:52.159Z",
+            "fromStatus": "قيد التنفيذ",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          }
+        ],
+        "shippingInfo": null,
+        "deliveryInfo": null,
+        "returnInfo": null,
+        "holdInfo": null,
+        "revisionAlert": null,
+        "cancellationInfo": null
+      },
+      {
+        "id": "ORD-575798",
+        "customerName": "sadasd",
+        "customerPhone": "213123",
+        "customerAddress": "dfsdfsdf",
+        "governorate": null,
+        "customerNotes": "",
+        "operationalNotes": null,
+        "salesRepId": "s1",
+        "salesRepName": "أحمد علي",
+        "items": [
+          {
+            "grade": "عالي (Code A)",
+            "price": 15,
+            "quantity": 500,
+            "productName": "زيت لافندر فرنسي"
+          }
+        ],
+        "subtotal": 7500,
+        "discountPercentage": 0,
+        "discountAmount": 0,
+        "shippingCost": 50,
+        "totalAmount": 7550,
+        "status": "جاري التجهيز",
+        "createdAt": "2026-11-15T20:29:35.798Z",
+        "commission": 375,
+        "version": 1,
+        "confirmedAt": null,
+        "confirmedById": null,
+        "confirmedByName": null,
+        "prepStartedAt": "2026-11-18T00:56:01.737Z",
+        "prepCompletedAt": null,
+        "shippedAt": null,
+        "deliveredAt": null,
+        "cancelledAt": null,
+        "returnedAt": null,
+        "pendingEditRequest": null,
+        "statusHistory": [
+          {
+            "toStatus": "جاري التجهيز",
+            "changedAt": "2026-11-18T00:56:01.737Z",
+            "fromStatus": "قيد التنفيذ",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          }
+        ],
+        "shippingInfo": null,
+        "deliveryInfo": null,
+        "returnInfo": null,
+        "holdInfo": null,
+        "revisionAlert": null,
+        "cancellationInfo": null
+      },
+      {
+        "id": "ord-1002",
+        "customerName": "مؤسسة الزهور العطرية",
+        "customerPhone": "0109876543",
+        "customerAddress": "مدينة نصر، القاهرة",
+        "governorate": null,
+        "customerNotes": "تغليف خاص ومحكم للزجاجات",
+        "operationalNotes": null,
+        "salesRepId": "s2",
+        "salesRepName": "سارة محمود",
+        "items": [
+          {
+            "grade": "تجاري (Code C)",
+            "price": 8,
+            "quantity": 500,
+            "productName": "زيت ياسمين طبيعي"
+          }
+        ],
+        "subtotal": 4000,
+        "discountPercentage": 0,
+        "discountAmount": 0,
+        "shippingCost": 80,
+        "totalAmount": 4080,
+        "status": "تم التجهيز",
+        "createdAt": "2026-11-15T19:46:19.603Z",
+        "commission": 240,
+        "version": 1,
+        "confirmedAt": null,
+        "confirmedById": null,
+        "confirmedByName": null,
+        "prepStartedAt": "2026-11-15T19:46:19.603Z",
+        "prepCompletedAt": "2026-11-18T00:56:05.639Z",
+        "shippedAt": null,
+        "deliveredAt": null,
+        "cancelledAt": null,
+        "returnedAt": null,
+        "pendingEditRequest": null,
+        "statusHistory": [
+          {
+            "toStatus": "تم التجهيز",
+            "changedAt": "2026-11-18T00:56:05.639Z",
+            "fromStatus": "قيد التنفيذ",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          }
+        ],
+        "shippingInfo": null,
+        "deliveryInfo": null,
+        "returnInfo": null,
+        "holdInfo": null,
+        "revisionAlert": null,
+        "cancellationInfo": null
+      },
+      {
+        "id": "ORD-240412",
+        "customerName": "عميل دونيا",
+        "customerPhone": "123456789",
+        "customerAddress": "الاسكندرية سيدى بشر",
+        "governorate": "الإسكندرية",
+        "customerNotes": "",
+        "operationalNotes": null,
+        "salesRepId": "s-1794955139139",
+        "salesRepName": "donia",
+        "items": [
+          {
+            "grade": "عالي (Code A)",
+            "price": 45,
+            "quantity": 500,
+            "pendingQty": 0,
+            "productName": "زيت عود ملكي",
+            "sourcingSource": "من المخزون الحالي",
+            "procurementStatus": "fulfilled",
+            "sourcingUpdatedAt": "2026-11-18T01:40:51.461Z",
+            "sourcingUpdatedBy": "المدير العام",
+            "externalSuppliedQty": 0,
+            "warehouseDeductedQty": 500,
+            "receivedIntoWarehouse": false
+          },
+          {
+            "grade": "وسط (Code B)",
+            "price": 10,
+            "quantity": 1500,
+            "pendingQty": 0,
+            "productName": "زيت لافندر فرنسي",
+            "sourcingSource": "من المخزون الحالي",
+            "procurementStatus": "fulfilled",
+            "sourcingUpdatedAt": "2026-11-18T01:40:51.461Z",
+            "sourcingUpdatedBy": "المدير العام",
+            "externalSuppliedQty": 0,
+            "warehouseDeductedQty": 1500,
+            "receivedIntoWarehouse": false
+          },
+          {
+            "grade": "عالي (Code A)",
+            "price": 8,
+            "quantity": 500,
+            "pendingQty": 0,
+            "productName": "زيت لافندر فرنسي",
+            "sourcingSource": "من المخزون الحالي",
+            "procurementStatus": "fulfilled",
+            "sourcingUpdatedAt": "2026-11-18T01:40:51.461Z",
+            "sourcingUpdatedBy": "المدير العام",
+            "externalSuppliedQty": 0,
+            "warehouseDeductedQty": 500,
+            "receivedIntoWarehouse": false
+          },
+          {
+            "grade": "وسط (Code B)",
+            "price": 9.7,
+            "quantity": 500,
+            "pendingQty": 500,
+            "productName": "بكرات روج",
+            "sourcingSource": "بانتظار التوفير",
+            "procurementStatus": "pending",
+            "sourcingUpdatedAt": "2026-11-18T01:40:51.461Z",
+            "sourcingUpdatedBy": "المدير العام",
+            "externalSuppliedQty": 0,
+            "warehouseDeductedQty": 0,
+            "receivedIntoWarehouse": false
+          }
+        ],
+        "subtotal": 46350,
+        "discountPercentage": 0,
+        "discountAmount": 0,
+        "shippingCost": 50,
+        "totalAmount": 46400,
+        "status": "جاري التجهيز",
+        "createdAt": "2026-11-17T22:40:40.412Z",
+        "commission": 927,
+        "version": 2,
+        "confirmedAt": null,
+        "confirmedById": null,
+        "confirmedByName": null,
+        "prepStartedAt": "2026-11-18T00:55:37.432Z",
+        "prepCompletedAt": null,
+        "shippedAt": null,
+        "deliveredAt": null,
+        "cancelledAt": null,
+        "returnedAt": null,
+        "pendingEditRequest": null,
+        "statusHistory": [
+          {
+            "note": "تم إنشاء الفاتورة",
+            "toStatus": "طلب جديد",
+            "changedAt": "2026-11-17T22:40:40.412Z",
+            "fromStatus": null,
+            "changedById": "u-1794955139139",
+            "changedByName": "donia",
+            "changedByRole": "sales"
+          },
+          {
+            "toStatus": "جاري التجهيز",
+            "changedAt": "2026-11-18T00:55:37.432Z",
+            "fromStatus": "طلب جديد",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          },
+          {
+            "toStatus": "تم التجهيز",
+            "changedAt": "2026-11-18T00:56:20.700Z",
+            "fromStatus": "جاري التجهيز",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          },
+          {
+            "note": "طلب تعديل من السيلز ينتظر المراجعة: إضافة 3 صنف",
+            "toStatus": "تم التجهيز",
+            "changedAt": "2026-11-18T01:37:49.998Z",
+            "fromStatus": "تم التجهيز",
+            "changedById": "u-1794955139139",
+            "changedByName": "donia",
+            "changedByRole": "sales"
+          },
+          {
+            "note": "تمت الموافقة على طلب التعديل وتحديث الفاتورة (تم التحويل تلقائيًا إلى \"جاري التجهيز\" لإعادة التجهيز)",
+            "toStatus": "جاري التجهيز",
+            "changedAt": "2026-11-18T01:40:51.461Z",
+            "fromStatus": "تم التجهيز",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          }
+        ],
+        "shippingInfo": null,
+        "deliveryInfo": null,
+        "returnInfo": null,
+        "holdInfo": null,
+        "revisionAlert": {
+          "status": "يحتاج إعادة تجهيز",
+          "summary": "إضافة 3 صنف",
+          "editedAt": "2026-11-18T01:40:51.461Z",
+          "reviewNote": "إعادة تجهيز مطلوبة بسبب تعديل الأصناف/الكميات",
+          "reviewedAt": "2026-11-18T01:40:51.461Z",
+          "editedByName": "المدير العام",
+          "reviewedById": "u1",
+          "latestVersion": 2,
+          "reviewedByName": "المدير العام",
+          "latestRevisionId": "rev-1794966051497-9112",
+          "hasPendingEditRequest": false,
+          "requiresRePreparation": true
+        },
+        "cancellationInfo": null
+      },
+      {
+        "id": "ORD-115377",
+        "customerName": "jdsj",
+        "customerPhone": "2234234",
+        "customerAddress": "sdfsfd",
+        "governorate": null,
+        "customerNotes": "",
+        "operationalNotes": null,
+        "salesRepId": "s1",
+        "salesRepName": "أحمد علي",
+        "items": [
+          {
+            "grade": "عالي (Code A)",
+            "price": 15,
+            "quantity": 250,
+            "productName": "زيت لافندر فرنسي"
+          }
+        ],
+        "subtotal": 3750,
+        "discountPercentage": 0,
+        "discountAmount": 0,
+        "shippingCost": 50,
+        "totalAmount": 3800,
+        "status": "جاري التجهيز",
+        "createdAt": "2026-11-18T00:35:15.377Z",
+        "commission": 187.5,
+        "version": 1,
+        "confirmedAt": null,
+        "confirmedById": null,
+        "confirmedByName": null,
+        "prepStartedAt": "2026-11-18T00:55:16.596Z",
+        "prepCompletedAt": null,
+        "shippedAt": null,
+        "deliveredAt": null,
+        "cancelledAt": null,
+        "returnedAt": null,
+        "pendingEditRequest": null,
+        "statusHistory": [
+          {
+            "note": "تم إنشاء الفاتورة",
+            "toStatus": "طلب جديد",
+            "changedAt": "2026-11-18T00:35:15.377Z",
+            "fromStatus": null,
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          },
+          {
+            "toStatus": "جاري التجهيز",
+            "changedAt": "2026-11-18T00:55:16.596Z",
+            "fromStatus": "طلب جديد",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          }
+        ],
+        "shippingInfo": null,
+        "deliveryInfo": null,
+        "returnInfo": null,
+        "holdInfo": null,
+        "revisionAlert": null,
+        "cancellationInfo": null
+      },
+      {
+        "id": "ORD-953964",
+        "customerName": "ابراهم تيست 2",
+        "customerPhone": "01234567",
+        "customerAddress": "الاسكندرية سيدى بشر",
+        "governorate": "الإسكندرية",
+        "customerNotes": "",
+        "operationalNotes": null,
+        "salesRepId": "s2",
+        "salesRepName": "سارة محمود",
+        "items": [
+          {
+            "grade": "وسط (Code B)",
+            "price": 9.7,
+            "quantity": 500,
+            "productName": "بكرات روج"
+          }
+        ],
+        "subtotal": 4850,
+        "discountPercentage": 0,
+        "discountAmount": 0,
+        "shippingCost": 50,
+        "totalAmount": 4900,
+        "status": "جاري التجهيز",
+        "createdAt": "2026-11-17T22:35:53.964Z",
+        "commission": 291,
+        "version": 1,
+        "confirmedAt": null,
+        "confirmedById": null,
+        "confirmedByName": null,
+        "prepStartedAt": "2026-11-18T00:55:41.693Z",
+        "prepCompletedAt": null,
+        "shippedAt": null,
+        "deliveredAt": null,
+        "cancelledAt": null,
+        "returnedAt": null,
+        "pendingEditRequest": null,
+        "statusHistory": [
+          {
+            "note": "تم إنشاء الفاتورة",
+            "toStatus": "طلب جديد",
+            "changedAt": "2026-11-17T22:35:53.964Z",
+            "fromStatus": null,
+            "changedById": "u3",
+            "changedByName": "سارة محمود",
+            "changedByRole": "sales"
+          },
+          {
+            "toStatus": "جاري التجهيز",
+            "changedAt": "2026-11-18T00:55:41.693Z",
+            "fromStatus": "طلب جديد",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          }
+        ],
+        "shippingInfo": null,
+        "deliveryInfo": null,
+        "returnInfo": null,
+        "holdInfo": null,
+        "revisionAlert": null,
+        "cancellationInfo": null
+      },
+      {
+        "id": "ORD-201728",
+        "customerName": "zxczxc",
+        "customerPhone": "213123",
+        "customerAddress": "sadads",
+        "governorate": "الفيوم",
+        "customerNotes": "",
+        "operationalNotes": null,
+        "salesRepId": "s-1794955139139",
+        "salesRepName": "donia",
+        "items": [
+          {
+            "grade": "تجاري (Code C)",
+            "price": 2.9,
+            "quantity": 250,
+            "productName": "زيت ياسمين طبيعي"
+          }
+        ],
+        "subtotal": 725,
+        "discountPercentage": 0,
+        "discountAmount": 0,
+        "shippingCost": 50,
+        "totalAmount": 775,
+        "status": "تم التسليم",
+        "createdAt": "2026-11-18T00:53:21.728Z",
+        "commission": 14.5,
+        "version": 1,
+        "confirmedAt": "2026-11-18T00:54:08.040Z",
+        "confirmedById": "u-1794955139139",
+        "confirmedByName": "donia",
+        "prepStartedAt": "2026-11-18T00:57:09.964Z",
+        "prepCompletedAt": "2026-11-18T00:57:18.696Z",
+        "shippedAt": "2026-11-18T00:57:34.629Z",
+        "deliveredAt": "2026-11-18T00:57:50.793Z",
+        "cancelledAt": null,
+        "returnedAt": null,
+        "pendingEditRequest": null,
+        "statusHistory": [
+          {
+            "note": "تم إنشاء مسودة الفاتورة بانتظار تأكيد العميل (لم يُخصم المخزون أو تُحسب العمولة بعد)",
+            "toStatus": "بانتظار تأكيد العميل",
+            "changedAt": "2026-11-18T00:53:21.728Z",
+            "fromStatus": null,
+            "changedById": "u-1794955139139",
+            "changedByName": "donia",
+            "changedByRole": "sales"
+          },
+          {
+            "note": "تأكيد العميل على الفاتورة وإرسال الطلب للتجهيز (تم خصم المخزون واحتساب العمولة)",
+            "toStatus": "طلب جديد",
+            "changedAt": "2026-11-18T00:54:08.040Z",
+            "fromStatus": "بانتظار تأكيد العميل",
+            "changedById": "u-1794955139139",
+            "changedByName": "donia",
+            "changedByRole": "sales"
+          },
+          {
+            "toStatus": "بانتظار التجهيز",
+            "changedAt": "2026-11-18T00:55:10.840Z",
+            "fromStatus": "طلب جديد",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          },
+          {
+            "toStatus": "جاري التجهيز",
+            "changedAt": "2026-11-18T00:57:09.964Z",
+            "fromStatus": "بانتظار التجهيز",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          },
+          {
+            "toStatus": "تم التجهيز",
+            "changedAt": "2026-11-18T00:57:18.696Z",
+            "fromStatus": "جاري التجهيز",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          },
+          {
+            "toStatus": "تم الشحن",
+            "changedAt": "2026-11-18T00:57:34.629Z",
+            "fromStatus": "تم التجهيز",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          },
+          {
+            "toStatus": "تم التسليم",
+            "changedAt": "2026-11-18T00:57:50.793Z",
+            "fromStatus": "تم الشحن",
+            "changedById": "u1",
+            "changedByName": "المدير العام",
+            "changedByRole": "admin"
+          }
+        ],
+        "shippingInfo": {
+          "history": [
+            {
+              "shippedAt": "2026-11-18T00:57:34.629Z",
+              "shippedById": "u1",
+              "shippedByName": "المدير العام"
+            }
+          ],
+          "shippedAt": "2026-11-18T00:57:34.629Z",
+          "shippedById": "u1",
+          "shippedByName": "المدير العام"
+        },
+        "deliveryInfo": {
+          "deliveredAt": "2026-11-18T00:57:50.793Z",
+          "confirmedById": "u1",
+          "confirmedByName": "المدير العام"
+        },
+        "returnInfo": null,
+        "holdInfo": null,
+        "revisionAlert": null,
+        "cancellationInfo": null
+      }
+    ],
+    "orderRevisions": [
+      {
+        "id": "rev-1794966051497-9112",
+        "orderId": "ORD-240412",
+        "fromVersion": 1,
+        "toVersion": 2,
+        "editedById": "u1",
+        "editedByName": "المدير العام",
+        "editedByRole": "admin",
+        "editedAt": "2026-11-18T01:40:51.461Z",
+        "reason": "تمت الموافقة على طلب التعديل وتحديث الفاتورة",
+        "orderStatusAtEdit": "تم التجهيز",
+        "addedItems": [
+          {
+            "grade": "وسط (Code B)",
+            "newPrice": 10,
+            "oldPrice": 0,
+            "changeType": "added",
+            "newQuantity": 1500,
+            "oldQuantity": 0,
+            "productName": "زيت لافندر فرنسي",
+            "quantityDelta": 1500
+          },
+          {
+            "grade": "عالي (Code A)",
+            "newPrice": 8,
+            "oldPrice": 0,
+            "changeType": "added",
+            "newQuantity": 500,
+            "oldQuantity": 0,
+            "productName": "زيت لافندر فرنسي",
+            "quantityDelta": 500
+          },
+          {
+            "grade": "وسط (Code B)",
+            "newPrice": 9.7,
+            "oldPrice": 0,
+            "changeType": "added",
+            "newQuantity": 500,
+            "oldQuantity": 0,
+            "productName": "بكرات روج",
+            "quantityDelta": 500
+          }
+        ],
+        "removedItems": [],
+        "modifiedItems": [],
+        "previousItemCount": 1,
+        "newItemCount": 4,
+        "previousTotal": 22550,
+        "newTotal": 46400,
+        "previousCommission": 450,
+        "newCommission": 927,
+        "requiresRePreparation": true,
+        "reviewStatus": "يحتاج إعادة تجهيز",
+        "reviewedById": "u1",
+        "reviewedByName": "المدير العام",
+        "reviewedAt": "2026-11-18T01:40:51.461Z",
+        "reviewNote": "تم اعتماد التعديل وتحويل الطلب لإعادة التجهيز"
+      }
+    ],
+    "stockMovements": [
+      {
+        "id": "stk-1794966051467-12227",
+        "productId": "2",
+        "productName": "زيت لافندر فرنسي",
+        "grade": "وسط (Code B)",
+        "orderId": "ORD-240412",
+        "movementType": "order_delta_deduction",
+        "sourcingSource": "من المخزون الحالي",
+        "quantityDelta": -1500,
+        "orderQuantityCovered": 1500,
+        "previousStock": 14400,
+        "newStock": 12900,
+        "supplierName": null,
+        "note": "خصم الكمية الإضافية من المخزن عند تعديل الفاتورة",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "createdAt": "2026-11-18T01:40:51.461Z"
+      },
+      {
+        "id": "stk-1794966051473-82732",
+        "productId": "1",
+        "productName": "زيت لافندر فرنسي",
+        "grade": "عالي (Code A)",
+        "orderId": "ORD-240412",
+        "movementType": "order_delta_deduction",
+        "sourcingSource": "من المخزون الحالي",
+        "quantityDelta": -500,
+        "orderQuantityCovered": 500,
+        "previousStock": 9250,
+        "newStock": 8750,
+        "supplierName": null,
+        "note": "خصم الكمية الإضافية من المخزن عند تعديل الفاتورة",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "createdAt": "2026-11-18T01:40:51.461Z"
+      }
+    ],
+    "chatMessages": [
+      {
+        "id": "msg-1",
+        "senderId": "u1",
+        "senderName": "المدير العام",
+        "text": "أهلاً بفريق العمل، تم تحديث أسعار زيت العود الملكي وتوفرت شحنة جديدة.",
+        "timestamp": "2026-11-15T15:46:19.603Z"
+      },
+      {
+        "id": "msg-2",
+        "senderId": "u2",
+        "senderName": "أحمد علي",
+        "text": "ممتاز يا فندم، عميل شركة النور طلب كمية إضافية بالفعل.",
+        "timestamp": "2026-11-15T17:46:19.603Z"
+      }
+    ],
+    "auditLogs": [
+      {
+        "id": "aud-1794965870016-85028",
+        "orderId": "ORD-240412",
+        "actionType": "order_edit_requested",
+        "actorId": "u-1794955139139",
+        "actorName": "donia",
+        "actorRole": "sales",
+        "details": {
+          "reason": null,
+          "proposedTotal": 46400,
+          "statusAtRequest": "تم التجهيز",
+          "requiresRePreparation": true
+        },
+        "createdAt": "2026-11-18T01:37:49.998Z"
+      },
+      {
+        "id": "aud-1794966051529-34454",
+        "orderId": "ORD-240412",
+        "actionType": "order_revised",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "newTotal": 46400,
+          "toVersion": 2,
+          "addedCount": 3,
+          "fromVersion": 1,
+          "removedCount": 0,
+          "reviewStatus": "يحتاج إعادة تجهيز",
+          "statusAtEdit": "تم التجهيز",
+          "targetStatus": "جاري التجهيز",
+          "modifiedCount": 0,
+          "previousTotal": 22550,
+          "requiresRePreparation": true
+        },
+        "createdAt": "2026-11-18T01:40:51.461Z"
+      },
+      {
+        "id": "aud-1794963201761-86365",
+        "orderId": "ORD-201728",
+        "actionType": "order_created_draft",
+        "actorId": "u-1794955139139",
+        "actorName": "donia",
+        "actorRole": "sales",
+        "details": {
+          "status": "بانتظار تأكيد العميل",
+          "itemCount": 1,
+          "commission": 14.5,
+          "totalAmount": 775
+        },
+        "createdAt": "2026-11-18T00:53:21.728Z"
+      },
+      {
+        "id": "aud-1794963248139-20772",
+        "orderId": "ORD-201728",
+        "actionType": "order_confirmed",
+        "actorId": "u-1794955139139",
+        "actorName": "donia",
+        "actorRole": "sales",
+        "details": {
+          "toStatus": "طلب جديد",
+          "commission": 14.5,
+          "fromStatus": "بانتظار تأكيد العميل",
+          "totalAmount": 775
+        },
+        "createdAt": "2026-11-18T00:54:08.040Z"
+      },
+      {
+        "id": "aud-1794963310862-64532",
+        "orderId": "ORD-201728",
+        "actionType": "order_status_changed",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "note": null,
+          "toStatus": "بانتظار التجهيز",
+          "fromStatus": "طلب جديد"
+        },
+        "createdAt": "2026-11-18T00:55:10.840Z"
+      },
+      {
+        "id": "aud-1794963316611-29266",
+        "orderId": "ORD-115377",
+        "actionType": "order_status_changed",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "note": null,
+          "toStatus": "جاري التجهيز",
+          "fromStatus": "طلب جديد"
+        },
+        "createdAt": "2026-11-18T00:55:16.596Z"
+      },
+      {
+        "id": "aud-1794963337448-58115",
+        "orderId": "ORD-240412",
+        "actionType": "order_status_changed",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "note": null,
+          "toStatus": "جاري التجهيز",
+          "fromStatus": "طلب جديد"
+        },
+        "createdAt": "2026-11-18T00:55:37.432Z"
+      },
+      {
+        "id": "aud-1794963341710-51318",
+        "orderId": "ORD-953964",
+        "actionType": "order_status_changed",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "note": null,
+          "toStatus": "جاري التجهيز",
+          "fromStatus": "طلب جديد"
+        },
+        "createdAt": "2026-11-18T00:55:41.693Z"
+      },
+      {
+        "id": "aud-1794963352174-83449",
+        "orderId": "ORD-437847",
+        "actionType": "order_status_changed",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "note": null,
+          "toStatus": "جاري التجهيز",
+          "fromStatus": "قيد التنفيذ"
+        },
+        "createdAt": "2026-11-18T00:55:52.159Z"
+      },
+      {
+        "id": "aud-1794963361752-68596",
+        "orderId": "ORD-575798",
+        "actionType": "order_status_changed",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "note": null,
+          "toStatus": "جاري التجهيز",
+          "fromStatus": "قيد التنفيذ"
+        },
+        "createdAt": "2026-11-18T00:56:01.737Z"
+      },
+      {
+        "id": "aud-1794963365654-83260",
+        "orderId": "ord-1002",
+        "actionType": "order_status_changed",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "note": null,
+          "toStatus": "تم التجهيز",
+          "fromStatus": "قيد التنفيذ"
+        },
+        "createdAt": "2026-11-18T00:56:05.639Z"
+      },
+      {
+        "id": "aud-1794963380716-95294",
+        "orderId": "ORD-240412",
+        "actionType": "order_status_changed",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "note": null,
+          "toStatus": "تم التجهيز",
+          "fromStatus": "جاري التجهيز"
+        },
+        "createdAt": "2026-11-18T00:56:20.700Z"
+      },
+      {
+        "id": "aud-1794963429983-96198",
+        "orderId": "ORD-201728",
+        "actionType": "order_status_changed",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "note": null,
+          "toStatus": "جاري التجهيز",
+          "fromStatus": "بانتظار التجهيز"
+        },
+        "createdAt": "2026-11-18T00:57:09.964Z"
+      },
+      {
+        "id": "aud-1794963438715-58502",
+        "orderId": "ORD-201728",
+        "actionType": "order_status_changed",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "note": null,
+          "toStatus": "تم التجهيز",
+          "fromStatus": "جاري التجهيز"
+        },
+        "createdAt": "2026-11-18T00:57:18.696Z"
+      },
+      {
+        "id": "aud-1794963454647-26440",
+        "orderId": "ORD-201728",
+        "actionType": "order_status_changed",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "note": null,
+          "toStatus": "تم الشحن",
+          "fromStatus": "تم التجهيز"
+        },
+        "createdAt": "2026-11-18T00:57:34.629Z"
+      },
+      {
+        "id": "aud-1794963470809-9016",
+        "orderId": "ORD-201728",
+        "actionType": "order_status_changed",
+        "actorId": "u1",
+        "actorName": "المدير العام",
+        "actorRole": "admin",
+        "details": {
+          "note": null,
+          "toStatus": "تم التسليم",
+          "fromStatus": "تم الشحن"
+        },
+        "createdAt": "2026-11-18T00:57:50.793Z"
+      },
+      {
+        "id": "aud-1794963621874-31631",
+        "orderId": "ORD-240412",
+        "actionType": "order_edit_requested",
+        "actorId": "u-1794955139139",
+        "actorName": "donia",
+        "actorRole": "sales",
+        "details": {
+          "reason": null,
+          "proposedTotal": 32550,
+          "statusAtRequest": "تم التجهيز"
+        },
+        "createdAt": "2026-11-18T01:00:21.856Z"
+      },
+      {
+        "id": "aud-1794963658682-26119",
+        "orderId": "ORD-240412",
+        "actionType": "order_edit_requested",
+        "actorId": "u-1794955139139",
+        "actorName": "donia",
+        "actorRole": "sales",
+        "details": {
+          "reason": null,
+          "proposedTotal": 36550,
+          "statusAtRequest": "تم التجهيز"
+        },
+        "createdAt": "2026-11-18T01:00:58.668Z"
+      },
+      {
+        "id": "aud-1794963705859-98710",
+        "orderId": "ORD-240412",
+        "actionType": "order_edit_requested",
+        "actorId": "u-1794955139139",
+        "actorName": "donia",
+        "actorRole": "sales",
+        "details": {
+          "reason": null,
+          "proposedTotal": 41400,
+          "statusAtRequest": "تم التجهيز"
+        },
+        "createdAt": "2026-11-18T01:01:45.843Z"
+      }
+    ]
+  }
+}

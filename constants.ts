@@ -48,10 +48,10 @@ export const INITIAL_USERS: User[] = [
 ];
 
 export const INITIAL_PRODUCTS: Product[] = [
-  { id: '1', name: 'زيت لافندر فرنسي', grade: 'عالي (Code A)', pricePerMg: 15, stock: 10000 },
-  { id: '2', name: 'زيت لافندر فرنسي', grade: 'وسط (Code B)', pricePerMg: 10, stock: 15000 },
-  { id: '3', name: 'زيت عود ملكي', grade: 'عالي (Code A)', pricePerMg: 45, stock: 5000 },
-  { id: '4', name: 'زيت ياسمين طبيعي', grade: 'تجاري (Code C)', pricePerMg: 8, stock: 20000 },
+  { id: '1', code: 'OIL-0001', name: 'زيت لافندر فرنسي', categoryId: 'cat-oils', categoryName: 'الزيوت العطرية', unit: 'mg', grade: 'عالي (Code A)', pricePerMg: 15, stock: 10000, isActive: true, isCommissionEligible: true, commissionMode: 'inherit_rep' },
+  { id: '2', code: 'OIL-0002', name: 'زيت لافندر فرنسي', categoryId: 'cat-oils', categoryName: 'الزيوت العطرية', unit: 'mg', grade: 'وسط (Code B)', pricePerMg: 10, stock: 15000, isActive: true, isCommissionEligible: true, commissionMode: 'inherit_rep' },
+  { id: '3', code: 'OIL-0003', name: 'زيت عود ملكي', categoryId: 'cat-oils', categoryName: 'الزيوت العطرية', unit: 'mg', grade: 'عالي (Code A)', pricePerMg: 45, stock: 5000, isActive: true, isCommissionEligible: true, commissionMode: 'inherit_rep' },
+  { id: '4', code: 'OIL-0004', name: 'زيت ياسمين طبيعي', categoryId: 'cat-oils', categoryName: 'الزيوت العطرية', unit: 'mg', grade: 'تجاري (Code C)', pricePerMg: 8, stock: 20000, isActive: true, isCommissionEligible: true, commissionMode: 'inherit_rep' },
 ];
 
 export const INITIAL_SALES_REPS: SalesRep[] = [

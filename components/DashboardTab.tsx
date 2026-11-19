@@ -1,22 +1,27 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { 
   TrendingUp, ShoppingCart, Package, Users, Award, 
   AlertCircle, CheckCircle2, Clock, ArrowUpRight, DollarSign, 
   Sparkles, Layers
 } from 'lucide-react';
-import { Order, Product, SalesRep, User, Customer } from '../types';
+import { Order, OrdersQueryStats, Product, SalesRep, User, Customer, SystemGeneralSettings } from '../types';
+import { apiClient } from '../src/lib/api';
+import { getSalesOrderDisplayState, type SalesOrderDisplayState } from '../src/lib/date-utils';
+import { UnifiedDateFilterBar, type DateFilterValue } from './UnifiedDateFilterBar';
 
 interface DashboardTabProps {
   orders: Order[];
   products: Product[];
   salesReps: SalesRep[];
   customers: Customer[];
+  generalSettings?: SystemGeneralSettings;
   currentUser: User;
   onOpenNewOrder: () => void;
   onSelectOrder: (order: Order) => void;
   onNavigateTab: (
     tab:
       | 'dashboard'
+      | 'operations'
       | 'orders'
       | 'prepared-orders'
       | 'shipping-orders'
@@ -24,48 +29,147 @@ interface DashboardTabProps {
       | 'inventory'
       | 'customers'
       | 'admin-users'
+      | 'owner-console'
   ) => void;
 }
+
+const RECENT_BADGE_CLASS: Record<SalesOrderDisplayState['badgeVariant'], string> = {
+  slate: 'bg-slate-200 text-slate-800',
+  sky: 'bg-sky-100 text-sky-900',
+  amber: 'bg-amber-100 text-amber-800',
+  yellow: 'bg-yellow-100 text-yellow-900',
+  blue: 'bg-blue-100 text-[#072F5F]',
+  indigo: 'bg-indigo-100 text-indigo-800',
+  emerald: 'bg-emerald-100 text-emerald-800',
+  orange: 'bg-orange-100 text-orange-800',
+  red: 'bg-red-100 text-red-800',
+};
 
 export const DashboardTab: React.FC<DashboardTabProps> = ({
   orders,
   products,
   salesReps,
   customers,
+  generalSettings,
   currentUser,
   onOpenNewOrder,
   onSelectOrder,
   onNavigateTab
 }) => {
-  const isAdmin = currentUser.role === 'admin' || currentUser.role === 'supervisor';
+  const [dateFilter, setDateFilter] = useState<DateFilterValue>({
+    preset: 'all',
+    dateType: 'createdAt',
+  });
+  const [queriedOrders, setQueriedOrders] = useState<Order[] | null>(null);
+  const [queriedStats, setQueriedStats] = useState<OrdersQueryStats | null>(null);
+  const [isQueryLoading, setIsQueryLoading] = useState(false);
+
+  const isAdmin = currentUser.role === 'owner' || currentUser.role === 'admin' || currentUser.role === 'supervisor';
   const canViewInventory = isAdmin || Boolean(currentUser.canEditInventory);
-  const canViewTeam = currentUser.role === 'admin';
+  const canViewTeam = currentUser.role === 'owner' || currentUser.role === 'admin';
   const currentRep = salesReps.find(r => r.userId === currentUser.id || r.id === currentUser.salesRepId);
 
-  // Stats calculation
-  const relevantOrders = isAdmin 
-    ? orders 
-    : orders.filter(o => o.salesRepId === currentRep?.id);
+  const canAccessOperations =
+    currentUser.role === 'owner' || currentUser.role === 'admin' || Boolean(currentUser.canManageOrderStatus);
 
-  const totalDeliveredRevenue = relevantOrders
-    .filter(o => o.status === 'تم التسليم')
-    .reduce((sum, o) => sum + o.totalAmount, 0);
+  const isDateFilterActive =
+    dateFilter.preset !== 'all' || Boolean(dateFilter.dateFrom) || Boolean(dateFilter.dateTo);
 
-  const pendingOrdersCount = relevantOrders.filter(
-    o => o.status === 'قيد التنفيذ' || o.status === 'تم التجهيز' || o.status === 'تم الشحن'
-  ).length;
-  const deliveredOrdersCount = relevantOrders.filter(o => o.status === 'تم التسليم').length;
+  useEffect(() => {
+    if (!isDateFilterActive) {
+      setQueriedOrders(null);
+      setQueriedStats(null);
+      return;
+    }
 
-  const totalMyCommission = isAdmin
-    ? salesReps.reduce((sum, r) => sum + r.totalCommission, 0)
-    : (currentRep?.totalCommission || 0);
+    let cancelled = false;
+    setIsQueryLoading(true);
+    apiClient
+      .queryOrders({
+        preset: dateFilter.preset,
+        dateType: dateFilter.dateType,
+        dateFrom: dateFilter.dateFrom,
+        dateTo: dateFilter.dateTo,
+      })
+      .then((res) => {
+        if (cancelled) return;
+        setQueriedOrders(res.orders);
+        setQueriedStats(res.stats);
+      })
+      .catch((err) => {
+        console.error('Failed to query dashboard orders:', err);
+      })
+      .finally(() => {
+        if (!cancelled) setIsQueryLoading(false);
+      });
 
-  const pendingMyCommission = isAdmin
-    ? salesReps.reduce((sum, r) => sum + r.pendingCommission, 0)
-    : (currentRep?.pendingCommission || 0);
+    return () => {
+      cancelled = true;
+    };
+  }, [isDateFilterActive, dateFilter.preset, dateFilter.dateType, dateFilter.dateFrom, dateFilter.dateTo, orders]);
 
-  // Low stock products (< 5000 mg)
-  const lowStockProducts = products.filter(p => p.stock < 5000);
+  // Stats calculation (Backend-filtered when date filter is active, live workspace props otherwise)
+  const relevantOrders = useMemo(() => {
+    if (isDateFilterActive && queriedOrders) {
+      return queriedOrders;
+    }
+    return isAdmin
+      ? orders
+      : orders.filter(o => o.salesRepId === currentRep?.id);
+  }, [isDateFilterActive, queriedOrders, isAdmin, orders, currentRep?.id]);
+
+  const totalDeliveredRevenue =
+    isDateFilterActive && queriedStats
+      ? queriedStats.deliveredRevenue
+      : relevantOrders
+          .filter(o => o.status === 'تم التسليم')
+          .reduce((sum, o) => sum + o.totalAmount, 0);
+
+  const awaitingConfirmationCount =
+    isDateFilterActive && queriedStats
+      ? queriedStats.draftOrdersCount
+      : relevantOrders.filter((o) => o.status === 'بانتظار تأكيد العميل').length;
+
+  const pendingOrdersCount =
+    isDateFilterActive && queriedStats
+      ? queriedStats.activeOrdersCount
+      : relevantOrders.filter(
+          (o) =>
+            o.status === 'طلب جديد' ||
+            o.status === 'قيد التنفيذ' ||
+            o.status === 'بانتظار التجهيز' ||
+            o.status === 'جاري التجهيز' ||
+            o.status === 'تم التجهيز' ||
+            o.status === 'تم الشحن'
+        ).length;
+
+  const deliveredOrdersCount =
+    isDateFilterActive && queriedStats
+      ? queriedStats.deliveredOrdersCount
+      : relevantOrders.filter(o => o.status === 'تم التسليم').length;
+
+  const totalMyCommission =
+    isDateFilterActive && queriedStats
+      ? queriedStats.totalCommission
+      : isAdmin
+        ? salesReps.reduce((sum, r) => sum + r.totalCommission, 0)
+        : (currentRep?.totalCommission || 0);
+
+  const pendingMyCommission =
+    isDateFilterActive && queriedStats
+      ? queriedStats.pendingCommission
+      : isAdmin
+        ? salesReps.reduce((sum, r) => sum + r.pendingCommission, 0)
+        : (currentRep?.pendingCommission || 0);
+
+  // Low stock products (category threshold)
+  const oilsThreshold = generalSettings?.lowStockThresholdOils ?? 5000;
+  const otherThreshold = generalSettings?.lowStockThresholdOther ?? 50;
+  const lowStockProducts = products.filter(
+    (p) =>
+      p.isActive !== false &&
+      p.stock < ((p.categoryId || 'cat-oils') === 'cat-oils' ? oilsThreshold : otherThreshold)
+  );
 
   return (
     <div className="space-y-5 sm:space-y-8 animate-in fade-in duration-300">
@@ -74,7 +178,7 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <span className="text-xs font-black text-blue-100">
-              {currentUser.role === 'admin' ? 'الإدارة العليا' : currentUser.role === 'supervisor' ? 'المشرف' : 'فريق السيلز'}
+              {currentUser.role === 'owner' ? 'المالك الرئيسي' : currentUser.role === 'admin' ? 'الإدارة العليا' : currentUser.role === 'supervisor' ? 'المشرف' : 'فريق السيلز'}
             </span>
             <span className="text-blue-300" aria-hidden="true">·</span>
             <span className="text-xs text-blue-200 font-bold">
@@ -83,7 +187,7 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
           </div>
           <h2 className="text-2xl sm:text-3xl md:text-4xl font-black">مرحباً، {currentUser.name}</h2>
           <p className="text-blue-100 text-xs sm:text-sm max-w-xl leading-relaxed">
-            متابعة فورية للمبيعات، فواتير الزيوت العطرية، نسب العمولات، ومستويات المخزون اللحظية.
+            متابعة فورية للمبيعات، الفواتير والكتالوج المتكامل، نسب العمولات، ومستويات المخزون اللحظية.
           </p>
         </div>
         <button
@@ -94,6 +198,16 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
           إنشاء فاتورة جديدة
         </button>
       </div>
+
+      {/* Unified Cairo Date Filter for Dashboard KPIs & Recent Orders */}
+      <UnifiedDateFilterBar
+        value={dateFilter}
+        onChange={setDateFilter}
+        totalMatched={relevantOrders.length}
+        totalRevenue={queriedStats ? queriedStats.totalRevenue : undefined}
+        loading={isQueryLoading}
+        compact
+      />
 
       {/* Main KPI Cards Grid (2-column compact on mobile, 4-column on desktop) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
@@ -125,7 +239,9 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
           </p>
           <p className="text-[11px] sm:text-xs font-bold text-amber-700 flex items-center gap-1 mt-1.5">
             <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-            <span>بانتظار التسليم</span>
+            <span>
+              بانتظار التسليم{awaitingConfirmationCount > 0 ? ` (+${awaitingConfirmationCount} مسودة عميل)` : ''}
+            </span>
           </p>
         </div>
 
@@ -181,39 +297,43 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
           </div>
 
           <div className="space-y-3">
-            {relevantOrders.slice(0, 5).map(order => (
-              <div
-                key={order.id}
-                onClick={() => onSelectOrder(order)}
-                className="p-4 sm:p-5 rounded-2xl bg-slate-50/80 hover:bg-blue-50/50 border border-slate-200/70 hover:border-blue-200 transition-all cursor-pointer flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 min-h-[64px]"
-              >
-                <div className="space-y-1 w-full sm:w-auto">
-                  <div className="flex items-center justify-between sm:justify-start gap-2.5">
-                    <p className="font-black text-slate-900 text-base">{order.customerName}</p>
-                    <span className={`px-2.5 py-0.5 rounded-lg text-xs font-black whitespace-nowrap ${
-                      order.status === 'تم التسليم' ? 'bg-emerald-100 text-emerald-800' :
-                      order.status === 'تم التجهيز' ? 'bg-blue-100 text-[#072F5F]' :
-                      order.status === 'تم الشحن' ? 'bg-indigo-100 text-indigo-800' :
-                      order.status === 'قيد التنفيذ' ? 'bg-amber-100 text-amber-800' :
-                      'bg-red-100 text-red-800'
-                    }`}>
-                      {order.status}
-                    </span>
+            {relevantOrders.slice(0, 5).map(order => {
+              const display = getSalesOrderDisplayState(order);
+              return (
+                <div
+                  key={order.id}
+                  onClick={() => onSelectOrder(order)}
+                  className="p-4 sm:p-5 rounded-2xl bg-slate-50/80 hover:bg-blue-50/50 border border-slate-200/70 hover:border-blue-200 transition-all cursor-pointer flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 min-h-[64px]"
+                >
+                  <div className="space-y-1 w-full sm:w-auto">
+                    <div className="flex flex-wrap items-center justify-between sm:justify-start gap-2">
+                      <p className="font-black text-slate-900 text-base">{order.customerName}</p>
+                      <span className={`px-2.5 py-0.5 rounded-lg text-xs font-black whitespace-nowrap ${
+                        RECENT_BADGE_CLASS[display.badgeVariant]
+                      }`}>
+                        {display.primaryLabel}
+                      </span>
+                      {display.secondaryLabel && (
+                        <span className="text-[10px] font-black text-[#072F5F] bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-lg">
+                          {display.secondaryLabel}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-500 font-bold">
+                      السيلز: {order.salesRepName} · {order.items.length} أصناف · {new Date(order.createdAt).toLocaleDateString('ar-EG')}
+                    </p>
                   </div>
-                  <p className="text-xs text-slate-500 font-bold">
-                    السيلز: {order.salesRepName} · {order.items.length} أصناف · {new Date(order.createdAt).toLocaleDateString('ar-EG')}
-                  </p>
+                  <div className="w-full sm:w-auto flex sm:block items-baseline justify-between pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200/60 sm:text-left">
+                    <p className="text-base sm:text-lg font-black text-[#072F5F] tabular-nums">
+                      {order.totalAmount.toLocaleString()} ج.م
+                    </p>
+                    <p className="text-xs font-bold text-slate-500 tabular-nums">
+                      عمولة: {order.commission.toLocaleString()} ج.م
+                    </p>
+                  </div>
                 </div>
-                <div className="w-full sm:w-auto flex sm:block items-baseline justify-between pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200/60 sm:text-left">
-                  <p className="text-base sm:text-lg font-black text-[#072F5F] tabular-nums">
-                    {order.totalAmount.toLocaleString()} ج.م
-                  </p>
-                  <p className="text-xs font-bold text-slate-500 tabular-nums">
-                    عمولة: {order.commission.toLocaleString()} ج.م
-                  </p>
-                </div>
-              </div>
-            ))}
+              );
+            })}
             {relevantOrders.length === 0 && (
               <div className="text-center py-10 text-slate-500 font-bold text-sm">
                 لا توجد طلبات مسجلة بعد.
@@ -236,25 +356,27 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
                   onClick={() => onNavigateTab('inventory')}
                   className="min-h-[40px] px-2 text-xs font-black text-[#0A468C] hover:underline"
                 >
-                  إدارة الزيوت
+                  إدارة الكتالوج والمخزون
                 </button>
               </div>
               <div className="space-y-2.5">
                 {lowStockProducts.length > 0 ? (
-                  lowStockProducts.map(prod => (
+                  lowStockProducts.slice(0, 6).map(prod => (
                     <div key={prod.id} className="p-3.5 bg-amber-50/70 rounded-2xl border border-amber-200/80 flex justify-between items-center gap-2">
                       <div>
                         <p className="font-black text-slate-900 text-sm">{prod.name}</p>
-                        <p className="text-xs text-amber-800 font-bold">{prod.grade}</p>
+                        <p className="text-xs text-amber-800 font-bold">
+                          {prod.categoryName || 'الزيوت العطرية'} · {prod.grade}
+                        </p>
                       </div>
                       <span className="text-xs font-black bg-amber-200 text-amber-950 px-3 py-1 rounded-xl tabular-nums whitespace-nowrap">
-                        {prod.stock.toLocaleString()} mg
+                        {prod.stock.toLocaleString()} {prod.unit || 'mg'}
                       </span>
                     </div>
                   ))
                 ) : (
                   <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100 text-xs font-bold text-[#072F5F] text-center">
-                    جميع أصناف الزيوت متوفرة بمستويات كافية
+                    جميع أصناف الكتالوج متوفرة بمستويات كافية
                   </div>
                 )}
               </div>
@@ -300,6 +422,24 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
               متابعة مراحل الطلبات
             </h3>
             <div className="space-y-2.5">
+              {canAccessOperations && (
+                <button
+                  onClick={() => onNavigateTab('operations')}
+                  className="w-full p-3.5 rounded-2xl bg-[#072F5F] hover:bg-[#0A468C] text-white flex justify-between items-center transition-all text-right"
+                >
+                  <span className="font-black text-sm">إدارة التجهيز والشحن</span>
+                  <span className="px-2.5 py-1 rounded-xl bg-white/15 text-white text-xs font-black tabular-nums">
+                    {relevantOrders.filter(o =>
+                      o.status === 'طلب جديد' ||
+                      o.status === 'قيد التنفيذ' ||
+                      o.status === 'بانتظار التجهيز' ||
+                      o.status === 'جاري التجهيز' ||
+                      o.status === 'تم التجهيز' ||
+                      o.status === 'تم الشحن'
+                    ).length}
+                  </span>
+                </button>
+              )}
               <button
                 onClick={() => onNavigateTab('prepared-orders')}
                 className="w-full p-3.5 rounded-2xl bg-blue-50/70 hover:bg-blue-100/80 border border-blue-100 flex justify-between items-center transition-all text-right"

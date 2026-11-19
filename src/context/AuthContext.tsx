@@ -11,6 +11,11 @@ interface AuthContextValue {
   authLoading: boolean;
   authError: string | null;
   loginWithUsername: (username: string, password: string) => Promise<boolean>;
+  completeAuthenticatedSession: (
+    token: string,
+    user: User,
+    workspace?: WorkspacePayload | null
+  ) => void;
   logout: () => void;
   setAuthUser: React.Dispatch<React.SetStateAction<User | null>>;
 }
@@ -34,15 +39,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setInitialWorkspace(null);
   };
 
+  const completeAuthenticatedSession = (
+    token: string,
+    user: User,
+    workspace: WorkspacePayload | null = null
+  ) => {
+    setInMemoryTokenProvider(async () => token);
+    setInitialWorkspace(workspace);
+    setAuthToken(token);
+    setAuthUser(user);
+    setAuthError(null);
+  };
+
   const loginWithUsername = async (username: string, password: string): Promise<boolean> => {
     setAuthError(null);
     setAuthLoading(true);
     try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
+      const payload = JSON.stringify({ username, password });
+      let response: Response;
+      try {
+        response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload,
+        });
+      } catch (firstNetErr) {
+        // Retry once transparently if the container/proxy was waking up or restarting
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload,
+        });
+        if (!response) throw firstNetErr;
+      }
 
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.token || !data.user) {
@@ -50,14 +80,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return false;
       }
 
-      setInMemoryTokenProvider(async () => data.token as string);
-      setInitialWorkspace((data.workspace as WorkspacePayload) || null);
-      setAuthToken(data.token as string);
-      setAuthUser(data.user as User);
+      completeAuthenticatedSession(
+        data.token as string,
+        data.user as User,
+        (data.workspace as WorkspacePayload) || null
+      );
       return true;
     } catch (err) {
       console.error('Login failed:', err);
-      setAuthError('تعذر الاتصال بالخادم لتسجيل الدخول.');
+      setAuthError('تعذر الاتصال بالخادم لتسجيل الدخول. يرجى تحديث الصفحة والمحاولة مرة أخرى.');
       return false;
     } finally {
       setAuthLoading(false);
@@ -82,6 +113,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         authLoading,
         authError,
         loginWithUsername,
+        completeAuthenticatedSession,
         logout,
         setAuthUser,
       }}

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { 
   Users, Search, Crown, Sparkles, Phone, MapPin, 
   Calendar, ShoppingBag, Send, Copy, Check, RefreshCcw, X,
-  Trash2, Plus, AlertTriangle, UserCheck, Droplets
+  Trash2, Plus, AlertTriangle, UserCheck, Droplets, Edit3
 } from 'lucide-react';
 import { Customer, Order, Product, User } from '../types';
 import { getMarketingInsights } from '../services/geminiService';
@@ -14,6 +14,10 @@ interface CustomersTabProps {
   currentUser?: User;
   onDeleteCustomer?: (customerId: string) => void;
   onAddCustomer?: (customer: { name: string; phone: string; address?: string }) => void;
+  onUpdateCustomer?: (
+    customerId: string,
+    data: { name: string; phone?: string; address?: string }
+  ) => Promise<void> | void;
 }
 
 export const CustomersTab: React.FC<CustomersTabProps> = ({
@@ -22,12 +26,20 @@ export const CustomersTab: React.FC<CustomersTabProps> = ({
   products,
   currentUser,
   onDeleteCustomer,
-  onAddCustomer
+  onAddCustomer,
+  onUpdateCustomer
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [classFilter, setClassFilter] = useState<string>('الكل');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [returnHistoryCustomer, setReturnHistoryCustomer] = useState<Customer | null>(null);
   const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(null);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editAddress, setEditAddress] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   
   // New Customer Form State
@@ -40,7 +52,11 @@ export const CustomersTab: React.FC<CustomersTabProps> = ({
   const [isLoadingAi, setIsLoadingAi] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const canDelete = currentUser?.role === 'admin' || currentUser?.canDeleteCustomers;
+  const canEdit =
+    currentUser?.role === 'owner' ||
+    currentUser?.role === 'admin' ||
+    currentUser?.role === 'supervisor';
+  const canDelete = currentUser?.role === 'owner' || currentUser?.role === 'admin' || currentUser?.canDeleteCustomers;
 
   const filteredCustomers = customers.filter(customer => {
     const matchesSearch = 
@@ -73,6 +89,37 @@ export const CustomersTab: React.FC<CustomersTabProps> = ({
     if (!customerToDelete || !onDeleteCustomer) return;
     onDeleteCustomer(customerToDelete.id);
     setCustomerToDelete(null);
+  };
+
+  const openEditModal = (customer: Customer) => {
+    setEditingCustomer(customer);
+    setEditName(customer.name);
+    setEditPhone(customer.phone || '');
+    setEditAddress(customer.address || '');
+    setEditError(null);
+  };
+
+  const handleSaveCustomerEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCustomer || !onUpdateCustomer || isSavingEdit) return;
+    if (!editName.trim()) {
+      setEditError('يرجى إدخال اسم العميل.');
+      return;
+    }
+    setIsSavingEdit(true);
+    setEditError(null);
+    try {
+      await onUpdateCustomer(editingCustomer.id, {
+        name: editName.trim(),
+        phone: editPhone.trim(),
+        address: editAddress.trim(),
+      });
+      setEditingCustomer(null);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : 'تعذر حفظ تعديلات العميل.');
+    } finally {
+      setIsSavingEdit(false);
+    }
   };
 
   const handleCreateCustomer = (e: React.FormEvent) => {
@@ -155,14 +202,25 @@ export const CustomersTab: React.FC<CustomersTabProps> = ({
                     عميل {customer.classification}
                   </span>
                   
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-slate-500 tabular-nums">
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs font-bold text-slate-500 tabular-nums ml-1">
                       {customerOrders.length} فواتير
                     </span>
+                    {canEdit && onUpdateCustomer && (
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(customer)}
+                        className="min-w-[38px] min-h-[38px] flex items-center justify-center text-slate-500 hover:text-[#0A468C] hover:bg-blue-50 rounded-xl transition-all"
+                        title="تعديل بيانات العميل"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                      </button>
+                    )}
                     {canDelete && onDeleteCustomer && (
                       <button
+                        type="button"
                         onClick={() => setCustomerToDelete(customer)}
-                        className="min-w-[40px] min-h-[40px] flex items-center justify-center text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
+                        className="min-w-[38px] min-h-[38px] flex items-center justify-center text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
                         title="حذف العميل من النظام"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -192,12 +250,26 @@ export const CustomersTab: React.FC<CustomersTabProps> = ({
                   )}
                 </div>
 
-                <div className="bg-blue-50/70 p-4 rounded-2xl border border-blue-100 mb-5">
+                <div className="bg-blue-50/70 p-4 rounded-2xl border border-blue-100 mb-4">
                   <span className="text-xs text-[#0A468C] font-bold block mb-0.5">إجمالي المشتريات التراكمية</span>
                   <p className="text-2xl font-black text-[#072F5F] tabular-nums">
                     {customer.totalSpent.toLocaleString()} <span className="text-xs font-bold text-[#0A468C]">ج.م</span>
                   </p>
                 </div>
+
+                {customer.returnHistory && customer.returnHistory.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setReturnHistoryCustomer(customer)}
+                    className="w-full mb-3 px-3.5 py-2.5 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-2xl text-xs font-black text-orange-900 flex items-center justify-between transition-all"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 text-orange-700 shrink-0" />
+                      سجل مرتجعات / رفض استلام ({customer.returnHistory.length})
+                    </span>
+                    <span className="underline text-[11px]">عرض التفاصيل</span>
+                  </button>
+                )}
               </div>
 
               {/* AI Marketing Trigger */}
@@ -293,38 +365,144 @@ export const CustomersTab: React.FC<CustomersTabProps> = ({
         </div>
       )}
 
-      {/* Delete Customer Confirmation Modal */}
-      {customerToDelete && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-[750] font-cairo" dir="rtl">
-          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-[2.5rem] p-6 sm:p-7 pb-safe shadow-2xl space-y-5 animate-in slide-in-from-bottom sm:zoom-in-95 duration-200">
-            <div className="w-14 h-14 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mx-auto">
-              <AlertTriangle className="w-7 h-7" />
-            </div>
+      {/* Edit Customer Modal */}
+      {editingCustomer && (() => {
+        const linkedOrdersCount = orders.filter(
+          (o) =>
+            o.customerName === editingCustomer.name ||
+            (Boolean(editingCustomer.phone) && o.customerPhone === editingCustomer.phone)
+        ).length;
+        return (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-[750] font-cairo" dir="rtl">
+            <div className="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-[2.5rem] p-6 sm:p-7 pb-safe shadow-2xl space-y-5 max-h-[92vh] overflow-y-auto animate-in slide-in-from-bottom sm:zoom-in-95 duration-200">
+              <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+                <div>
+                  <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                    <Edit3 className="w-5 h-5 text-[#0A468C]" />
+                    تعديل بيانات العميل
+                  </h3>
+                  <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                    {linkedOrdersCount > 0
+                      ? `مرتبط بـ ${linkedOrdersCount} فاتورة تاريخية — سيتم الحفاظ على ربط جميع الفواتير بالعميل تلقائياً`
+                      : 'لا توجد فواتير مرتبطة حالياً بهذا العميل'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingCustomer(null)}
+                  className="min-w-[44px] min-h-[44px] flex items-center justify-center text-slate-500 hover:text-slate-800 rounded-xl"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
 
-            <div className="text-center space-y-2">
-              <h3 className="text-xl font-black text-slate-900">تأكيد حذف العميل</h3>
-              <p className="text-sm text-slate-600 font-bold leading-relaxed">
-                هل أنت متأكد من حذف العميل <span className="text-[#072F5F] font-black">"{customerToDelete.name}"</span> من قاعدة البيانات؟
-              </p>
-            </div>
+              {editError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-2xl text-xs font-black text-red-700">
+                  {editError}
+                </div>
+              )}
 
-            <div className="flex gap-3 pt-2">
-              <button
-                onClick={handleConfirmDeleteCustomer}
-                className="flex-1 min-h-[48px] py-3.5 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-sm transition-all shadow-md active:scale-95"
-              >
-                تأكيد الحذف
-              </button>
-              <button
-                onClick={() => setCustomerToDelete(null)}
-                className="min-h-[48px] px-5 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl font-bold text-sm transition-all"
-              >
-                إلغاء
-              </button>
+              <form onSubmit={(e) => void handleSaveCustomerEdit(e)} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">اسم العميل أو المؤسسة *</label>
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">رقم الهاتف</label>
+                  <input
+                    type="tel"
+                    inputMode="tel"
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                    className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm tabular-nums"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">العنوان / المنطقة</label>
+                  <input
+                    type="text"
+                    value={editAddress}
+                    onChange={(e) => setEditAddress(e.target.value)}
+                    className="w-full min-h-[48px] px-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="submit"
+                    disabled={isSavingEdit}
+                    className="flex-1 min-h-[48px] py-3.5 bg-[#0A468C] hover:bg-[#072F5F] text-white rounded-2xl font-black text-sm transition-all shadow-md active:scale-95 disabled:opacity-60"
+                  >
+                    {isSavingEdit ? 'جاري الحفظ...' : 'حفظ التعديلات'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingCustomer(null)}
+                    className="min-h-[48px] px-5 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl font-bold text-sm"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
+
+      {/* Delete Customer Confirmation Modal */}
+      {customerToDelete && (() => {
+        const linkedOrdersCount = orders.filter(
+          (o) =>
+            o.customerName === customerToDelete.name ||
+            (Boolean(customerToDelete.phone) && o.customerPhone === customerToDelete.phone)
+        ).length;
+        return (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-[750] font-cairo" dir="rtl">
+            <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-[2.5rem] p-6 sm:p-7 pb-safe shadow-2xl space-y-5 animate-in slide-in-from-bottom sm:zoom-in-95 duration-200">
+              <div className="w-14 h-14 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mx-auto">
+                <AlertTriangle className="w-7 h-7" />
+              </div>
+
+              <div className="text-center space-y-2">
+                <h3 className="text-xl font-black text-slate-900">تأكيد حذف العميل</h3>
+                <p className="text-sm text-slate-600 font-bold leading-relaxed">
+                  هل أنت متأكد من حذف العميل <span className="text-[#072F5F] font-black">"{customerToDelete.name}"</span> من قاعدة البيانات؟
+                </p>
+                {linkedOrdersCount > 0 && (
+                  <div className="p-3 bg-amber-50 border border-amber-300 rounded-2xl text-xs font-black text-amber-950 text-right">
+                    تحذير حماية السجلات: هذا العميل مرتبط حالياً بـ {linkedOrdersCount} فاتورة تاريخية ولا يُسمح بحذفه للحفاظ على سلامة الفواتير؛ يمكنك تعديل بياناته بدلاً من الحذف.
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                {linkedOrdersCount === 0 && (
+                  <button
+                    onClick={handleConfirmDeleteCustomer}
+                    className="flex-1 min-h-[48px] py-3.5 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-sm transition-all shadow-md active:scale-95"
+                  >
+                    تأكيد الحذف
+                  </button>
+                )}
+                <button
+                  onClick={() => setCustomerToDelete(null)}
+                  className="flex-1 min-h-[48px] px-5 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl font-bold text-sm transition-all"
+                >
+                  إغلاق
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* AI Marketing Modal */}
       {selectedCustomer && (
@@ -381,6 +559,59 @@ export const CustomersTab: React.FC<CustomersTabProps> = ({
         </div>
       )}
 
+      {/* Customer Return / Refusal History Modal */}
+      {returnHistoryCustomer && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-[750] font-cairo" dir="rtl">
+          <div className="bg-white w-full max-w-xl rounded-t-3xl sm:rounded-[2.5rem] p-5 sm:p-7 pb-safe shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto animate-in slide-in-from-bottom sm:zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-lg font-black text-[#072F5F] flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-orange-600" />
+                  سجل المرتجعات ورفض الاستلام
+                </h3>
+                <p className="text-xs font-bold text-slate-500 mt-0.5">
+                  العميل: {returnHistoryCustomer.name} · {returnHistoryCustomer.phone}
+                </p>
+              </div>
+              <button
+                onClick={() => setReturnHistoryCustomer(null)}
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center hover:bg-slate-100 rounded-xl"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {(returnHistoryCustomer.returnHistory || []).map((entry, idx) => (
+                <div
+                  key={idx}
+                  className="bg-orange-50/70 border border-orange-200 rounded-2xl p-4 space-y-1.5 text-xs"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-black text-orange-950">
+                      فاتورة #{entry.orderId} · {entry.outcome} ({entry.reason})
+                    </span>
+                    <span className="font-bold text-orange-800 tabular-nums">
+                      {new Date(entry.recordedAt).toLocaleString('ar-EG')}
+                    </span>
+                  </div>
+                  <p className="font-bold text-slate-800 leading-relaxed">{entry.details}</p>
+                  <p className="text-[11px] font-bold text-slate-500">
+                    سُجل بواسطة: {entry.recordedByName}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setReturnHistoryCustomer(null)}
+              className="w-full min-h-[48px] py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-2xl font-black text-sm"
+            >
+              إغلاق
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

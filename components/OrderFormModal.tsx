@@ -4,10 +4,34 @@ import {
   Sparkles, Search, ArrowRight, ShoppingCart, Droplets,
   Package, AlertCircle, Minus, ChevronDown
 } from 'lucide-react';
-import { Product, SalesRep, OrderItem, OilGrade, Order, Customer } from '../types';
+import {
+  Product,
+  ProductCategory,
+  ProductUnit,
+  CommissionConfig,
+  SystemGeneralSettings,
+  SalesRep,
+  OrderItem,
+  OilGrade,
+  Order,
+  Customer,
+  ItemSourcingSource,
+} from '../types';
+import { VALID_SOURCING_SOURCES } from '../src/lib/date-utils';
+import {
+  DEFAULT_CATEGORIES,
+  DEFAULT_COMMISSION_CONFIG,
+  PRODUCT_UNIT_OPTIONS,
+  calculateOrderFinancialsAndCommission,
+  getQuickQuantityPresetsForUnit,
+} from '../src/lib/commission-utils';
+import { classifyProductName } from '../src/lib/product-classifier';
 
 interface OrderFormModalProps {
   products: Product[];
+  categories?: ProductCategory[];
+  commissionConfig?: CommissionConfig;
+  generalSettings?: SystemGeneralSettings;
   salesReps: SalesRep[];
   customers?: Customer[];
   currentRep?: SalesRep;
@@ -25,6 +49,9 @@ const OIL_GRADES: OilGrade[] = ['عالي (Code A)', 'وسط (Code B)', 'تجا�
 
 export const OrderFormModal: React.FC<OrderFormModalProps> = ({
   products,
+  categories = DEFAULT_CATEGORIES,
+  commissionConfig = DEFAULT_COMMISSION_CONFIG,
+  generalSettings,
   salesReps,
   customers = [],
   currentRep,
@@ -43,10 +70,16 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
       ? editingOrder.pendingEditRequest
       : editingOrder;
 
+  const activeProducts = useMemo(
+    () => products.filter((p) => p.isActive !== false),
+    [products]
+  );
+
   // Customer Details
   const [customerName, setCustomerName] = useState(sourceDraft?.customerName || '');
   const [customerPhone, setCustomerPhone] = useState(sourceDraft?.customerPhone || '');
   const [customerAddress, setCustomerAddress] = useState(sourceDraft?.customerAddress || '');
+  const [governorate, setGovernorate] = useState(sourceDraft?.governorate || '');
   const [customerNotes, setCustomerNotes] = useState(sourceDraft?.customerNotes || '');
   const [editReason, setEditReason] = useState(
     editingOrder?.pendingEditRequest?.reason || ''
@@ -60,22 +93,30 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
   const [cart, setCart] = useState<OrderItem[]>(() =>
     sourceDraft ? sourceDraft.items.map((item) => ({ ...item })) : []
   );
-  const [selectedProductId, setSelectedProductId] = useState<string>(products[0]?.id || '');
-  const [itemNameInput, setItemNameInput] = useState<string>(products[0]?.name || '');
-  const [itemGrade, setItemGrade] = useState<OilGrade>(products[0]?.grade || 'عالي (Code A)');
-  const [itemQuantity, setItemQuantity] = useState<string>('500');
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('الكل');
+  const [selectedProductId, setSelectedProductId] = useState<string>(activeProducts[0]?.id || '');
+  const [itemNameInput, setItemNameInput] = useState<string>(activeProducts[0]?.name || '');
+  const [customCategoryId, setCustomCategoryId] = useState<string>('cat-other');
+  const [customUnit, setCustomUnit] = useState<ProductUnit>('قطعة');
+  const [itemGrade, setItemGrade] = useState<OilGrade>(activeProducts[0]?.grade || 'عالي (Code A)');
+  const [itemQuantity, setItemQuantity] = useState<string>(
+    activeProducts[0]?.unit === 'mg' || !activeProducts[0] ? '500' : '1'
+  );
   const [customPrice, setCustomPrice] = useState<string>(
-    products[0] ? products[0].pricePerMg.toString() : ''
+    activeProducts[0] ? activeProducts[0].pricePerMg.toString() : ''
   );
   const [showProductDropdown, setShowProductDropdown] = useState(false);
   const [addNewToInventory, setAddNewToInventory] = useState<boolean>(true);
+  const [itemSourcingSource, setItemSourcingSource] = useState<ItemSourcingSource>('من المخزون الحالي');
+  const [itemSupplierName, setItemSupplierName] = useState<string>('');
+  const [itemSourcingNotes, setItemSourcingNotes] = useState<string>('');
 
   // Pricing adjustments
   const [discountPercentage, setDiscountPercentage] = useState<number>(
     sourceDraft?.discountPercentage ?? 0
   );
   const [shippingCost, setShippingCost] = useState<number>(
-    sourceDraft?.shippingCost ?? 50
+    sourceDraft?.shippingCost ?? generalSettings?.defaultShippingCost ?? 50
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -90,28 +131,50 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
     const cleanInput = itemNameInput.trim().toLowerCase();
     if (!cleanInput) return undefined;
     if (selectedProductId) {
-      const byId = products.find(
-        (p) => p.id === selectedProductId && p.name.trim().toLowerCase() === cleanInput && p.grade === itemGrade
-      );
-      if (byId) return byId;
+      const byId = activeProducts.find((p) => p.id === selectedProductId);
+      if (byId && (byId.name.trim().toLowerCase() === cleanInput || (byId.code || '').trim().toLowerCase() === cleanInput)) {
+        return byId;
+      }
     }
-    return products.find(
-      (p) => p.name.trim().toLowerCase() === cleanInput && p.grade === itemGrade
-    );
-  }, [products, selectedProductId, itemNameInput, itemGrade]);
+    return activeProducts.find(
+      (p) =>
+        (p.code && p.code.trim().toLowerCase() === cleanInput) ||
+        (p.name.trim().toLowerCase() === cleanInput && (p.categoryId !== 'cat-oils' || p.grade === itemGrade))
+    ) || activeProducts.find((p) => p.name.trim().toLowerCase() === cleanInput);
+  }, [activeProducts, selectedProductId, itemNameInput, itemGrade]);
 
+  const activeCategoryObj = useMemo(
+    () =>
+      matchedProduct
+        ? categories.find((c) => c.id === matchedProduct.categoryId)
+        : categories.find((c) => c.id === customCategoryId),
+    [matchedProduct, categories, customCategoryId]
+  );
+
+  const activeUnit: ProductUnit = matchedProduct?.unit || customUnit || activeCategoryObj?.defaultUnit || 'mg';
+  const activePresets = useMemo(() => getQuickQuantityPresetsForUnit(activeUnit), [activeUnit]);
   const isCustomNewItem = itemNameInput.trim().length > 0 && !matchedProduct;
+  const autoCustomClassification = useMemo(
+    () => (isCustomNewItem ? classifyProductName(itemNameInput, categories) : null),
+    [isCustomNewItem, itemNameInput, categories]
+  );
 
-  // Filter products by typed name
+  // Filter products by category tab + search term (code or name)
   const filteredProducts = useMemo(() => {
     const q = itemNameInput.trim().toLowerCase();
-    if (!q) return products;
-    return products.filter(
-      (p) =>
+    return activeProducts.filter((p) => {
+      const matchesCat =
+        selectedCategoryFilter === 'الكل' || p.categoryId === selectedCategoryFilter;
+      if (!matchesCat) return false;
+      if (!q) return true;
+      return (
         p.name.toLowerCase().includes(q) ||
-        p.grade.toLowerCase().includes(q)
-    );
-  }, [products, itemNameInput]);
+        (p.code || '').toLowerCase().includes(q) ||
+        p.grade.toLowerCase().includes(q) ||
+        p.categoryName.toLowerCase().includes(q)
+      );
+    });
+  }, [activeProducts, selectedCategoryFilter, itemNameInput]);
 
   // Filter customer autocomplete
   const customerSuggestions = useMemo(() => {
@@ -125,6 +188,17 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
       .slice(0, 4);
   }, [customers, customerName]);
 
+  const matchedExistingCustomer = useMemo(() => {
+    const cleanName = customerName.trim().toLowerCase();
+    const cleanPhone = customerPhone.trim();
+    if (!cleanName && !cleanPhone) return undefined;
+    return customers.find(
+      (c) =>
+        (cleanName && c.name.trim().toLowerCase() === cleanName) ||
+        (cleanPhone && c.phone === cleanPhone)
+    );
+  }, [customers, customerName, customerPhone]);
+
   const handleSelectCustomerSuggestion = (c: Customer) => {
     setCustomerName(c.name);
     setCustomerPhone(c.phone);
@@ -136,11 +210,17 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
     setSelectedProductId(prod.id);
     setItemNameInput(prod.name);
     setItemGrade(prod.grade);
+    setCustomCategoryId(prod.categoryId || 'cat-oils');
+    setCustomUnit(prod.unit || 'mg');
     setCustomPrice(prod.pricePerMg.toString());
+    const presets = getQuickQuantityPresetsForUnit(prod.unit || 'mg');
+    if (presets[1]) {
+      setItemQuantity(presets[1]);
+    }
     setShowProductDropdown(false);
   };
 
-  // Add Item to Cart (works for both warehouse products and custom/new oils)
+  // Add Item to Cart (works for all catalog categories + custom/new items)
   const handleAddItem = () => {
     setFormError(null);
     const cleanName = itemNameInput.trim();
@@ -151,23 +231,41 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
 
     const qty = parseFloat(itemQuantity);
     if (isNaN(qty) || qty <= 0) {
-      setFormError('يرجى إدخال كمية صحيحة بالمليجرام (mg)');
+      setFormError(`يرجى إدخال كمية صحيحة بـ (${activeUnit})`);
       return;
     }
 
     const price = customPrice !== '' ? parseFloat(customPrice) : matchedProduct?.pricePerMg ?? NaN;
     if (isNaN(price) || price <= 0) {
-      setFormError('يرجى إدخال سعر صحيح للـ mg');
+      setFormError(`يرجى إدخال سعر صحيح لـ (${activeUnit})`);
       return;
     }
 
-    const targetGrade = matchedProduct ? matchedProduct.grade : itemGrade;
+    const resolvedAuto = !matchedProduct
+      ? classifyProductName(cleanName, categories)
+      : null;
+    const targetCategoryId = matchedProduct
+      ? matchedProduct.categoryId
+      : (resolvedAuto?.categoryId || 'cat-other');
+    const targetCategoryName =
+      matchedProduct?.categoryName ||
+      resolvedAuto?.categoryName ||
+      categories.find((c) => c.id === targetCategoryId)?.name ||
+      'مستلزمات أخرى';
+    const targetUnit = matchedProduct?.unit || customUnit || resolvedAuto?.defaultUnit || 'قطعة';
+    const targetGrade = matchedProduct
+      ? matchedProduct.grade
+      : targetCategoryId === 'cat-oils'
+        ? itemGrade
+        : 'قياسي';
     const isCustom = !matchedProduct;
 
     const existingIndex = cart.findIndex(
       (item) =>
         item.productName.trim().toLowerCase() === cleanName.toLowerCase() &&
-        item.grade === targetGrade
+        item.grade === targetGrade &&
+        (item.unit || 'mg') === targetUnit &&
+        (item.sourcingSource || 'من المخزون الحالي') === itemSourcingSource
     );
 
     if (existingIndex >= 0) {
@@ -176,21 +274,34 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
         ...updated[existingIndex],
         quantity: updated[existingIndex].quantity + qty,
         price,
+        sourcingSource: itemSourcingSource,
+        ...(itemSupplierName.trim() ? { supplierName: itemSupplierName.trim() } : {}),
+        ...(itemSourcingNotes.trim() ? { sourcingNotes: itemSourcingNotes.trim() } : {}),
         ...(isCustom ? { isCustom: true, addToInventory: addNewToInventory } : {}),
       };
       setCart(updated);
     } else {
       const newItem: OrderItem = {
+        ...(matchedProduct ? { productId: matchedProduct.id, productCode: matchedProduct.code } : {}),
         productName: matchedProduct ? matchedProduct.name : cleanName,
+        categoryId: targetCategoryId,
+        categoryName: targetCategoryName,
+        unit: targetUnit,
         grade: targetGrade,
         quantity: qty,
         price,
+        sourcingSource: itemSourcingSource,
+        ...(itemSupplierName.trim() ? { supplierName: itemSupplierName.trim() } : {}),
+        ...(itemSourcingNotes.trim() ? { sourcingNotes: itemSourcingNotes.trim() } : {}),
         ...(isCustom ? { isCustom: true, addToInventory: addNewToInventory } : {}),
       };
       setCart([...cart, newItem]);
     }
 
-    setItemQuantity('500');
+    setItemQuantity(activePresets[1] || '1');
+    setItemSupplierName('');
+    setItemSourcingNotes('');
+    setItemSourcingSource('من المخزون الحالي');
     if (isCustom) {
       setItemNameInput('');
       setSelectedProductId('');
@@ -198,28 +309,69 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
     }
   };
 
+  const handleUpdateItemSource = (index: number, nextSource: ItemSourcingSource) => {
+    setCart((prev) =>
+      prev.map((item, idx) => (idx === index ? { ...item, sourcingSource: nextSource } : item))
+    );
+  };
+
   const handleRemoveItem = (index: number) => {
     setCart(cart.filter((_, i) => i !== index));
   };
 
-  const handleUpdateItemQty = (index: number, delta: number) => {
+  const handleUpdateItemQty = (index: number, direction: 1 | -1) => {
     setCart(
       cart.map((item, idx) => {
         if (idx !== index) return item;
-        const newQty = Math.max(50, item.quantity + delta);
+        const unit = item.unit || 'mg';
+        const step = unit === 'mg' ? 100 : unit === 'جرام' || unit === 'ملليلتر' ? 10 : 1;
+        const minVal = unit === 'mg' ? 50 : 1;
+        const newQty = Math.max(minVal, item.quantity + direction * step);
         return { ...item, quantity: newQty };
       })
     );
   };
 
-  // Calculations
-  const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  // Calculations (product-driven commission calculation matching server authority)
   const maxDiscount = selectedRep?.maxDiscountAllowed || (isAdmin ? 50 : 10);
   const actualDiscountPercent = Math.min(maxDiscount, Math.max(0, discountPercentage));
-  const discountAmount = (subtotal * actualDiscountPercent) / 100;
-  const totalAmount = Math.max(0, subtotal - discountAmount + shippingCost);
-  const commissionRate = selectedRep?.customCommissionRate || 0.05;
-  const commission = (subtotal - discountAmount) * commissionRate;
+  const frozenOrderSnapshot =
+    isEditing &&
+    editingOrder?.status !== 'بانتظار تأكيد العميل' &&
+    selectedRepId === editingOrder?.salesRepId
+      ? editingOrder?.commissionRuleSnapshot
+      : null;
+  const computedFinancials = useMemo(
+    () =>
+      calculateOrderFinancialsAndCommission({
+        items: cart,
+        discountPercentage: actualDiscountPercent,
+        shippingCost,
+        repBaseRate:
+          frozenOrderSnapshot?.repBaseRate ?? selectedRep?.customCommissionRate,
+        repCategoryRates: selectedRep?.categoryRates,
+        commissionConfig,
+        productsCatalog: products,
+        categoriesCatalog: categories,
+        frozenSnapshot: frozenOrderSnapshot,
+      }),
+    [
+      cart,
+      actualDiscountPercent,
+      shippingCost,
+      selectedRep?.customCommissionRate,
+      selectedRep?.categoryRates,
+      commissionConfig,
+      products,
+      categories,
+      frozenOrderSnapshot,
+    ]
+  );
+
+  const subtotal = computedFinancials.subtotal;
+  const discountAmount = computedFinancials.discountAmount;
+  const totalAmount = computedFinancials.totalAmount;
+  const commission = computedFinancials.commission;
 
   // Submit Order (Create or Update)
   const handleSubmit = async (e?: React.FormEvent) => {
@@ -231,7 +383,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
       return;
     }
     if (cart.length === 0) {
-      setFormError('يرجى إضافة صنف زيت واحد على الأقل إلى الفاتورة');
+      setFormError('يرجى إضافة صنف واحد على الأقل إلى الفاتورة');
       setMobileStep('products');
       return;
     }
@@ -243,16 +395,17 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
           customerName: customerName.trim(),
           customerPhone: customerPhone.trim(),
           customerAddress: customerAddress.trim(),
+          governorate: governorate.trim() || undefined,
           customerNotes: customerNotes.trim(),
           salesRepId: selectedRep?.id || '',
           salesRepName: selectedRep?.name || '',
-          items: cart,
+          items: computedFinancials.items,
           subtotal,
           discountPercentage: actualDiscountPercent,
           discountAmount,
           shippingCost,
           totalAmount,
-          status: editingOrder ? editingOrder.status : 'قيد التنفيذ',
+          status: editingOrder ? editingOrder.status : 'بانتظار تأكيد العميل',
           commission,
         },
         editReason.trim() || undefined
@@ -291,14 +444,16 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
               </h2>
               <p className="text-[11px] text-blue-200/90 font-bold hidden sm:block">
                 {isEditRequest
-                  ? 'الطلب في حالة "تم التجهيز" — سيُرسل طلب التعديل لمسؤول حالة الطلبات للموافقة'
+                  ? `الطلب في حالة "${editingOrder?.status}" — سيُرسل طلب التعديل لمسؤول التجهيز والشحن للموافقة`
                   : isApproveOverride
                   ? 'قم بمراجعة أو تعديل البيانات والأصناف ثم اضغط اعتماد للموافقة الفورية'
                   : isEditing
-                  ? editingOrder?.status === 'تم التسليم'
-                    ? 'تعديل إداري على فاتورة مسلمة — يتم تحديث المخزون والعمولات تلقائياً'
-                    : 'تحديث الأصناف والكميات والبيانات مع إعادة احتساب المخزون تلقائياً'
-                  : 'تسجيل طلبات وتوزيع زيوت الجملة أو إضافة أصناف جديدة'}
+                  ? editingOrder?.status === 'بانتظار تأكيد العميل'
+                    ? 'تعديل مسودة الفاتورة قبل تأكيد العميل — بدون تأثير على المخزون حتى التأكيد'
+                    : editingOrder?.status === 'تم التسليم'
+                      ? 'تعديل إداري على فاتورة مسلمة — يتم تحديث المخزون والعمولات تلقائياً وتسجيل مراجعة'
+                      : 'تحديث الأصناف والكميات وفق صافي الفرق مع تسجيل مراجعة وتنبيه التجهيز'
+                  : 'تُحفظ الفاتورة أولاً بانتظار تأكيد العميل لإرسالها ومراجعتها قبل خصم المخزون'}
               </p>
             </div>
           </div>
@@ -336,7 +491,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <span>2. الزيوت</span>
+            <span>2. الأصناف</span>
             {cart.length > 0 && (
               <span
                 className={`px-1.5 py-0.5 rounded-md text-[10px] tabular-nums ${
@@ -448,7 +603,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                 {/* Customer Address */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">
@@ -460,10 +615,46 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                       type="text"
                       value={customerAddress}
                       onChange={(e) => setCustomerAddress(e.target.value)}
-                      placeholder="مثال: الموسكي - العتبة، القاهرة"
+                      placeholder="مثال: الموسكي - العتبة"
                       className="w-full min-h-[48px] pr-10 pl-3 py-3 bg-white rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm text-slate-900"
                     />
                   </div>
+                </div>
+
+                {/* Governorate */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    المحافظة (اختياري)
+                  </label>
+                  <input
+                    type="text"
+                    list="egypt-governorates-list"
+                    value={governorate}
+                    onChange={(e) => setGovernorate(e.target.value)}
+                    placeholder="مثال: القاهرة / الجيزة"
+                    className="w-full min-h-[48px] px-4 py-3 bg-white rounded-2xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm text-slate-900"
+                  />
+                  <datalist id="egypt-governorates-list">
+                    <option value="القاهرة" />
+                    <option value="الجيزة" />
+                    <option value="الإسكندرية" />
+                    <option value="القليوبية" />
+                    <option value="الدقهلية" />
+                    <option value="الشرقية" />
+                    <option value="الغربية" />
+                    <option value="المنوفية" />
+                    <option value="البحيرة" />
+                    <option value="الفيوم" />
+                    <option value="بني سويف" />
+                    <option value="المنيا" />
+                    <option value="أسيوط" />
+                    <option value="سوهاج" />
+                    <option value="طنطا" />
+                    <option value="المنصورة" />
+                    <option value="بورسعيد" />
+                    <option value="الإسماعيلية" />
+                    <option value="السويس" />
+                  </datalist>
                 </div>
 
                 {/* Assigned Sales Person */}
@@ -488,9 +679,22 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                   )}
                 </div>
               </div>
+
+              {matchedExistingCustomer?.returnHistory && matchedExistingCustomer.returnHistory.length > 0 && (
+                <div className="bg-orange-50 border border-orange-200 rounded-2xl p-3.5 text-xs space-y-1">
+                  <p className="font-black text-orange-950 flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-orange-700 shrink-0" />
+                    تنبيه سجل مرتجعات لهذا العميل ({matchedExistingCustomer.returnHistory.length} مرات)
+                  </p>
+                  <p className="font-bold text-orange-900">
+                    آخر حالة: {matchedExistingCustomer.returnHistory[0].outcome} ({matchedExistingCustomer.returnHistory[0].reason}) —{' '}
+                    {matchedExistingCustomer.returnHistory[0].details}
+                  </p>
+                </div>
+              )}
             </div>
 
-            {/* Section 2: Oil Product Selection OR Free-Text New/Custom Product */}
+            {/* Section 2: Categorized Product Selection OR Free-Text New/Custom Product */}
             <div
               className={`bg-blue-50/60 p-4 sm:p-5 rounded-2xl sm:rounded-3xl border border-blue-200/80 space-y-4 ${
                 mobileStep === 'products' ? 'block' : 'hidden lg:block'
@@ -499,11 +703,11 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-sm font-black text-[#072F5F] flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-[#0A468C]" />
-                  إضافة صنف زيت للفاتورة (من المخزن أو صنف جديد)
+                  إضافة صنف للفاتورة (من الكتالوج أو صنف جديد)
                 </span>
                 {matchedProduct ? (
                   <span className="text-xs font-black text-[#072F5F] bg-white border border-blue-200 px-3 py-1 rounded-xl tabular-nums">
-                    المخزون: {matchedProduct.stock.toLocaleString()} mg
+                    المخزون: {matchedProduct.stock.toLocaleString()} {matchedProduct.unit || 'mg'}
                   </span>
                 ) : isCustomNewItem ? (
                   <span className="text-xs font-black text-[#0A468C] bg-white border border-blue-300 px-3 py-1 rounded-xl">
@@ -512,10 +716,50 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                 ) : null}
               </div>
 
-              {/* Combo Input: Type product name freely OR pick from warehouse dropdown */}
+              {/* Category Tabs Filter */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCategoryFilter('الكل');
+                    setShowProductDropdown(true);
+                  }}
+                  className={`min-h-[34px] px-3 py-1 rounded-xl text-xs font-black whitespace-nowrap transition-all ${
+                    selectedCategoryFilter === 'الكل'
+                      ? 'bg-[#072F5F] text-white shadow-sm'
+                      : 'bg-white text-slate-600 border border-blue-200 hover:bg-blue-50'
+                  }`}
+                >
+                  الكل ({activeProducts.length})
+                </button>
+                {categories
+                  .filter((c) => c.isActive !== false)
+                  .map((cat) => {
+                    const count = activeProducts.filter((p) => p.categoryId === cat.id).length;
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedCategoryFilter(cat.id);
+                          setShowProductDropdown(true);
+                        }}
+                        className={`min-h-[34px] px-3 py-1 rounded-xl text-xs font-black whitespace-nowrap transition-all ${
+                          selectedCategoryFilter === cat.id
+                            ? 'bg-[#0A468C] text-white shadow-sm'
+                            : 'bg-white text-slate-600 border border-blue-200 hover:bg-blue-50'
+                        }`}
+                      >
+                        {cat.name} ({count})
+                      </button>
+                    );
+                  })}
+              </div>
+
+              {/* Combo Input: Search by code or name OR pick from warehouse dropdown */}
               <div className="relative space-y-2.5">
                 <label className="block text-xs font-bold text-[#072F5F]">
-                  اسم الصنف (اكتب اسم الصنف أو اختر من المخزن)
+                  اسم الصنف أو الكود (ابحث أو اختر من الكتالوج)
                 </label>
                 <div className="flex gap-2">
                   <div className="relative flex-1">
@@ -528,18 +772,25 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                         const val = e.target.value;
                         setItemNameInput(val);
                         setShowProductDropdown(true);
-                        const exactMatch = products.find(
-                          (p) => p.name.trim().toLowerCase() === val.trim().toLowerCase()
+                        const exactMatch = activeProducts.find(
+                          (p) =>
+                            p.name.trim().toLowerCase() === val.trim().toLowerCase() ||
+                            (p.code && p.code.trim().toLowerCase() === val.trim().toLowerCase())
                         );
                         if (exactMatch) {
                           setSelectedProductId(exactMatch.id);
                           setItemGrade(exactMatch.grade);
+                          setCustomCategoryId(exactMatch.categoryId);
+                          setCustomUnit(exactMatch.unit || 'mg');
                           setCustomPrice(exactMatch.pricePerMg.toString());
                         } else {
                           setSelectedProductId('');
+                          const cls = classifyProductName(val, categories);
+                          setCustomCategoryId(cls.categoryId);
+                          setCustomUnit(cls.defaultUnit);
                         }
                       }}
-                      placeholder="اكتب اسم الزيت أو اختر من القائمة..."
+                      placeholder="اكتب اسم الصنف أو الكود..."
                       className="w-full min-h-[48px] pr-10 pl-10 py-3 bg-white rounded-2xl font-bold outline-none border border-blue-200 focus:border-[#0A468C] text-base sm:text-sm text-slate-900"
                     />
                     {itemNameInput && (
@@ -563,9 +814,9 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                     type="button"
                     onClick={() => setShowProductDropdown((prev) => !prev)}
                     className="min-h-[48px] px-3.5 bg-white border border-blue-200 hover:border-[#0A468C] text-[#072F5F] rounded-2xl text-xs font-black flex items-center gap-1 shrink-0"
-                    title="عرض كل أصناف المخزن"
+                    title="عرض أصناف الكتالوج"
                   >
-                    <span>المخزن</span>
+                    <span>الكتالوج</span>
                     <ChevronDown
                       className={`w-4 h-4 transition-transform ${showProductDropdown ? 'rotate-180' : ''}`}
                     />
@@ -574,10 +825,10 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
 
                 {/* Searchable Warehouse Dropdown */}
                 {showProductDropdown && (
-                  <div className="bg-white rounded-2xl shadow-xl border border-blue-200 p-2 max-h-56 overflow-y-auto space-y-1 z-30">
+                  <div className="bg-white rounded-2xl shadow-xl border border-blue-200 p-2 max-h-60 overflow-y-auto space-y-1 z-30">
                     <div className="flex items-center justify-between px-2 py-1">
                       <span className="text-[11px] font-black text-[#0A468C]">
-                        أصناف المخزن ({filteredProducts.length})
+                        أصناف الكتالوج ({filteredProducts.length})
                       </span>
                       <button
                         type="button"
@@ -600,13 +851,24 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                         }`}
                       >
                         <div className="min-w-0">
-                          <p className="font-black text-slate-900 truncate">{p.name}</p>
-                          <p className="text-[11px] text-slate-500 font-bold">{p.grade}</p>
+                          <div className="flex items-center gap-1.5">
+                            {p.code && (
+                              <span dir="ltr" className="text-[10px] font-black px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded tabular-nums">
+                                {p.code}
+                              </span>
+                            )}
+                            <p className="font-black text-slate-900 truncate">{p.name}</p>
+                          </div>
+                          <p className="text-[11px] text-slate-500 font-bold">
+                            {p.categoryName} {p.grade && p.grade !== 'قياسي' ? `· ${p.grade}` : ''}
+                          </p>
                         </div>
                         <div className="text-left shrink-0 tabular-nums">
-                          <p className="font-black text-[#072F5F]">{p.pricePerMg} ج.م/mg</p>
+                          <p className="font-black text-[#072F5F]">
+                            {p.pricePerMg} ج.م/{p.unit || 'mg'}
+                          </p>
                           <p className="text-[10px] text-slate-500 font-bold">
-                            متاح: {p.stock.toLocaleString()} mg
+                            متاح: {p.stock.toLocaleString()} {p.unit || 'mg'}
                           </p>
                         </div>
                       </button>
@@ -625,25 +887,60 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                   </div>
                 )}
 
-                {/* Grade & Auto-Add to Warehouse option when typing a custom/new item */}
+                {/* Auto-Classification Badge & Unit/Grade when typing a custom/new item */}
                 {isCustomNewItem && (
                   <div className="bg-white p-3.5 rounded-2xl border border-blue-200 space-y-3">
-                    <div>
-                      <label className="block text-xs font-bold text-[#072F5F] mb-1.5">
-                        درجة الصنف الجديد
-                      </label>
-                      <select
-                        value={itemGrade}
-                        onChange={(e) => setItemGrade(e.target.value as OilGrade)}
-                        className="w-full min-h-[46px] px-3.5 py-2.5 bg-slate-50 rounded-xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-base sm:text-sm text-slate-900"
-                      >
-                        {OIL_GRADES.map((g) => (
-                          <option key={g} value={g}>
-                            {g}
-                          </option>
-                        ))}
-                      </select>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-[#072F5F] mb-1">
+                          تصنيف الصنف الجديد (تلقائي حسب الاسم)
+                        </label>
+                        <div className="w-full min-h-[42px] px-3 py-2 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-2">
+                          <span className="font-black text-xs sm:text-sm text-[#072F5F]">
+                            {autoCustomClassification?.categoryName || 'مستلزمات أخرى'}
+                          </span>
+                          <span className="text-[10px] font-bold text-slate-500">
+                            {autoCustomClassification?.reason}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#072F5F] mb-1">
+                          وحدة القياس
+                        </label>
+                        <select
+                          value={customUnit}
+                          onChange={(e) => setCustomUnit(e.target.value as ProductUnit)}
+                          className="w-full min-h-[42px] px-3 py-2 bg-slate-50 rounded-xl font-bold outline-none border border-slate-200 text-xs sm:text-sm"
+                        >
+                          {PRODUCT_UNIT_OPTIONS.map((u) => (
+                            <option key={u} value={u}>
+                              {u}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
+
+                    {(autoCustomClassification?.categoryId || customCategoryId) === 'cat-oils' && (
+                      <div>
+                        <label className="block text-xs font-bold text-[#072F5F] mb-1">
+                          درجة النقاوة
+                        </label>
+                        <select
+                          value={itemGrade}
+                          onChange={(e) => setItemGrade(e.target.value as OilGrade)}
+                          className="w-full min-h-[42px] px-3 py-2 bg-slate-50 rounded-xl font-bold outline-none border border-slate-200 text-xs sm:text-sm"
+                        >
+                          {OIL_GRADES.map((g) => (
+                            <option key={g} value={g}>
+                              {g}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
 
                     <label className="flex items-start gap-2.5 cursor-pointer select-none min-h-[40px] p-2 rounded-xl hover:bg-blue-50/60 transition-colors">
                       <input
@@ -665,22 +962,22 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                 )}
               </div>
 
-              {/* Weight Presets & Input */}
+              {/* Dynamic Unit Presets & Input */}
               <div className="space-y-2.5">
                 <div className="flex justify-between items-center">
                   <label className="block text-xs font-bold text-[#072F5F]">
-                    الكمية المطلوبة (mg مليجرام)
+                    الكمية المطلوبة ({activeUnit})
                   </label>
-                  <span className="text-xs font-bold text-[#0A468C] tabular-nums">
-                    {parseFloat(itemQuantity) >= 1000
-                      ? `≈ ${(parseFloat(itemQuantity) / 1000).toFixed(1)} جرام`
-                      : ''}
-                  </span>
+                  {activeUnit === 'mg' && parseFloat(itemQuantity) >= 1000 && (
+                    <span className="text-xs font-bold text-[#0A468C] tabular-nums">
+                      ≈ {(parseFloat(itemQuantity) / 1000).toFixed(1)} جرام
+                    </span>
+                  )}
                 </div>
 
-                {/* Quick Weight Buttons (44px touch targets) */}
+                {/* Quick Quantity Buttons (Dynamic by Unit) */}
                 <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                  {['250', '500', '1000', '2500', '5000', '10000'].map((preset) => (
+                  {activePresets.map((preset) => (
                     <button
                       key={preset}
                       type="button"
@@ -691,7 +988,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                           : 'bg-white text-[#072F5F] hover:bg-blue-100/60 border border-blue-200'
                       }`}
                     >
-                      {preset} mg
+                      {preset} {activeUnit}
                     </button>
                   ))}
                 </div>
@@ -699,15 +996,16 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                   <div>
                     <label className="block text-xs font-bold text-slate-600 mb-1">
-                      الكمية (mg)
+                      الكمية ({activeUnit})
                     </label>
                     <input
                       type="number"
                       inputMode="decimal"
-                      min="1"
+                      min="0.1"
+                      step="any"
                       value={itemQuantity}
                       onChange={(e) => setItemQuantity(e.target.value)}
-                      placeholder="الكمية بالمليجرام..."
+                      placeholder={`الكمية بـ ${activeUnit}...`}
                       className="w-full min-h-[48px] p-3.5 bg-white rounded-2xl font-black outline-none border border-blue-200 focus:border-[#0A468C] text-base text-[#072F5F] tabular-nums"
                     />
                   </div>
@@ -715,24 +1013,70 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                   {/* Custom or default price */}
                   <div>
                     <label className="block text-xs font-bold text-slate-600 mb-1">
-                      السعر للـ mg (ج.م)
+                      السعر للـ {activeUnit} (ج.م)
                     </label>
                     <div className="relative">
                       <input
                         type="number"
                         inputMode="decimal"
-                        step="0.1"
-                        min="0.1"
+                        step="any"
+                        min="0.01"
                         value={customPrice}
                         onChange={(e) => setCustomPrice(e.target.value)}
-                        placeholder={matchedProduct ? `${matchedProduct.pricePerMg}` : 'أدخل السعر للـ mg'}
-                        className="w-full min-h-[48px] p-3.5 pl-20 bg-white rounded-2xl font-black outline-none border border-blue-200 focus:border-[#0A468C] text-base text-[#072F5F] tabular-nums"
+                        placeholder={matchedProduct ? `${matchedProduct.pricePerMg}` : `أدخل السعر / ${activeUnit}`}
+                        className="w-full min-h-[48px] p-3.5 pl-24 bg-white rounded-2xl font-black outline-none border border-blue-200 focus:border-[#0A468C] text-base text-[#072F5F] tabular-nums"
                       />
                       <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500 pointer-events-none">
-                        ج.م / mg
+                        ج.م / {activeUnit}
                       </span>
                     </div>
                   </div>
+                </div>
+                {/* Multi-Source Item Procurement Selector */}
+                <div className="bg-white/90 p-3.5 rounded-2xl border border-blue-200 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="block text-xs font-black text-[#072F5F]">
+                      مصدر التوفير لهذا الصنف
+                    </label>
+                    {matchedProduct &&
+                      Number(itemQuantity) > 0 &&
+                      matchedProduct.stock < Number(itemQuantity) &&
+                      itemSourcingSource !== 'توفير خارجي دون إدخاله إلى المخزن' && (
+                        <span className="text-[11px] font-black text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-lg">
+                          {matchedProduct.stock <= 0
+                            ? 'المخزون 0 — سيُقبل الصنف ويدرج بانتظار التوفير'
+                            : `المتاح ${matchedProduct.stock.toLocaleString()} ${activeUnit} والباقي ${(Number(itemQuantity) - matchedProduct.stock).toLocaleString()} ${activeUnit} بانتظار التوفير`}
+                        </span>
+                      )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <select
+                      value={itemSourcingSource}
+                      onChange={(e) => setItemSourcingSource(e.target.value as ItemSourcingSource)}
+                      className="w-full min-h-[42px] px-3 py-2 bg-slate-50 rounded-xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-xs sm:text-sm text-slate-900"
+                    >
+                      {VALID_SOURCING_SOURCES.map((src) => (
+                        <option key={src} value={src}>
+                          {src}
+                        </option>
+                      ))}
+                    </select>
+
+                    <input
+                      type="text"
+                      value={itemSupplierName}
+                      onChange={(e) => setItemSupplierName(e.target.value)}
+                      placeholder="اسم المورد أو المصدر (اختياري)..."
+                      className="w-full min-h-[42px] px-3 py-2 bg-slate-50 rounded-xl font-bold outline-none border border-slate-200 focus:border-[#0A468C] text-xs sm:text-sm text-slate-900"
+                    />
+                  </div>
+
+                  {itemSourcingSource === 'توفير خارجي دون إدخاله إلى المخزن' && (
+                    <p className="text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-1.5">
+                      سيتم تسجيل توفير هذا الصنف خارجيًا دون خصم أو زيادة على رصيد المخزن الحالي.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -776,7 +1120,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                           )}
                         </div>
                         <span className="font-black text-[#072F5F] tabular-nums whitespace-nowrap">
-                          {item.quantity} mg · {(item.quantity * item.price).toLocaleString()} ج.م
+                          {item.quantity} {item.unit || 'mg'} · {(item.quantity * item.price).toLocaleString()} ج.م
                         </span>
                       </div>
                     ))}
@@ -830,10 +1174,12 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                 />
               </div>
 
-              {isEditRequest && (
+              {(isEditRequest || (isEditing && !isApproveOverride)) && (
                 <div className="col-span-3 bg-blue-50 p-3.5 rounded-2xl border border-blue-200">
                   <label className="block text-xs font-black text-[#072F5F] mb-1">
-                    سبب طلب التعديل / رسالة لمسؤول الطلبات (اختياري)
+                    {isEditRequest
+                      ? 'سبب طلب التعديل / رسالة لمسؤول الطلبات (اختياري)'
+                      : 'سبب التعديل / ملاحظة المراجعة (اختياري)'}
                   </label>
                   <input
                     type="text"
@@ -905,10 +1251,10 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                     className="w-full min-h-[44px] px-3 bg-white text-slate-900 rounded-xl font-bold outline-none text-base"
                   />
                 </div>
-                {isEditRequest && (
+                {(isEditRequest || (isEditing && !isApproveOverride)) && (
                   <div className="col-span-2">
                     <label className="block text-xs font-bold text-blue-100 mb-1">
-                      سبب طلب التعديل لمسؤول الطلبات
+                      {isEditRequest ? 'سبب طلب التعديل لمسؤول الطلبات' : 'سبب التعديل (اختياري)'}
                     </label>
                     <input
                       type="text"
@@ -923,7 +1269,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
 
               {/* Cart Items List */}
               <div className="max-h-56 sm:max-h-60 overflow-y-auto space-y-2.5 pr-1">
-                {cart.map((item, idx) => (
+                {computedFinancials.items.map((item, idx) => (
                   <div
                     key={idx}
                     className="bg-white/10 p-3.5 rounded-2xl flex justify-between items-center gap-2 text-xs"
@@ -931,8 +1277,24 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                     <div className="space-y-1.5 min-w-0">
                       <p className="font-bold text-white text-sm truncate">{item.productName}</p>
                       <div className="flex flex-wrap items-center gap-1.5 text-xs text-blue-200">
-                        <span className="bg-blue-900/60 px-2 py-0.5 rounded text-[10px]">
-                          {item.grade}
+                        {item.categoryName && (
+                          <span className="bg-blue-900/70 px-2 py-0.5 rounded text-[10px] font-bold">
+                            {item.categoryName}
+                          </span>
+                        )}
+                        {item.grade && item.grade !== 'قياسي' && (
+                          <span className="bg-blue-900/60 px-2 py-0.5 rounded text-[10px]">
+                            {item.grade}
+                          </span>
+                        )}
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            item.isCommissionEligible
+                              ? 'bg-emerald-500/20 text-emerald-200'
+                              : 'bg-white/10 text-blue-200'
+                          }`}
+                        >
+                          {item.isCommissionEligible ? 'خاضع للعمولة' : 'بدون عمولة'}
                         </span>
                         {item.isCustom && (
                           <span className="bg-white/15 text-white px-2 py-0.5 rounded text-[10px] font-bold">
@@ -940,22 +1302,38 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                           </span>
                         )}
                         <span className="tabular-nums">
-                          {item.quantity} mg × {item.price} ج.م
+                          {item.quantity} {item.unit || 'mg'} × {item.price} ج.م
                         </span>
+                      </div>
+                      <div className="pt-1">
+                        <select
+                          value={item.sourcingSource || 'من المخزون الحالي'}
+                          onChange={(e) =>
+                            handleUpdateItemSource(idx, e.target.value as ItemSourcingSource)
+                          }
+                          aria-label={`مصدر توفير ${item.productName}`}
+                          className="w-full bg-white/15 text-white border border-white/20 rounded-lg px-2 py-1 text-[11px] font-bold outline-none [&>option]:text-slate-900"
+                        >
+                          {VALID_SOURCING_SOURCES.map((src) => (
+                            <option key={src} value={src}>
+                              {src}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                       <div className="flex items-center gap-1.5 pt-1">
                         <button
                           type="button"
-                          onClick={() => handleUpdateItemQty(idx, -100)}
-                          aria-label="تقليل 100 ملجم"
+                          onClick={() => handleUpdateItemQty(idx, -1)}
+                          aria-label="تقليل الكمية"
                           className="min-w-[32px] min-h-[32px] flex items-center justify-center bg-white/15 hover:bg-white/25 rounded-lg text-white"
                         >
                           <Minus className="w-3.5 h-3.5" />
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleUpdateItemQty(idx, 100)}
-                          aria-label="زيادة 100 ملجم"
+                          onClick={() => handleUpdateItemQty(idx, 1)}
+                          aria-label="زيادة الكمية"
                           className="min-w-[32px] min-h-[32px] flex items-center justify-center bg-white/15 hover:bg-white/25 rounded-lg text-white"
                         >
                           <Plus className="w-3.5 h-3.5" />
@@ -991,7 +1369,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                       onClick={() => setMobileStep('products')}
                       className="lg:hidden mt-2 px-4 py-2 bg-white/15 text-white rounded-xl text-xs font-black"
                     >
-                      الذهاب لاختيار أو كتابة الزيوت
+                      الذهاب لاختيار أو كتابة الأصناف
                     </button>
                   </div>
                 )}
@@ -1018,6 +1396,13 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
               </div>
 
               <div className="flex justify-between text-blue-200 text-xs pt-1">
+                <span>مبيعات خاضعة للعمولة:</span>
+                <span className="font-bold tabular-nums">
+                  {computedFinancials.commissionableSubtotal.toLocaleString()} ج.م
+                </span>
+              </div>
+
+              <div className="flex justify-between text-blue-200 text-xs">
                 <span>عمولة السيلز المقدرة:</span>
                 <span className="font-black tabular-nums">{commission.toLocaleString()} ج.م</span>
               </div>
@@ -1055,7 +1440,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                   ? 'حفظ واعتماد التعديلات'
                   : isEditing
                   ? 'حفظ تعديلات الفاتورة'
-                  : 'تأكيد وإصدار الفاتورة'}
+                  : 'حفظ الفاتورة (بانتظار تأكيد العميل)'}
               </button>
             </div>
           </div>
@@ -1076,7 +1461,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
               onClick={() => setMobileStep('products')}
               className="min-h-[48px] px-5 bg-[#0A468C] hover:bg-[#072F5F] text-white rounded-2xl font-black text-sm flex items-center gap-2 shadow-md active:scale-[0.98]"
             >
-              <span>التالي: الزيوت</span>
+              <span>التالي: الأصناف</span>
               <ArrowRight className="w-4 h-4 rotate-180" />
             </button>
           )}
@@ -1113,7 +1498,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                   ? 'حفظ واعتماد'
                   : isEditing
                   ? 'حفظ التعديلات'
-                  : 'إصدار الفاتورة'}
+                  : 'حفظ بانتظار التأكيد'}
               </span>
             </button>
           )}
