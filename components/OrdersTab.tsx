@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ShoppingCart,
   Search,
@@ -22,8 +23,12 @@ import {
   ChevronDown,
   ChevronUp,
   XCircle,
+  FileSpreadsheet,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import {
+  BulkPreviewResult,
   Order,
   OrderReturnPrimaryReason,
   OrderStatus,
@@ -36,11 +41,13 @@ import {
   type SalesOrderDisplayState,
 } from '../src/lib/date-utils';
 import { UnifiedDateFilterBar, type DateFilterValue } from './UnifiedDateFilterBar';
+import { BulkActionBar, BulkPreviewModal } from './BulkActionComponents';
 
 interface OrdersTabProps {
   orders: Order[];
   currentUser: User;
   fixedStatus?: OrderStatus;
+  onRefreshWorkspace?: () => Promise<void> | void;
   onOpenNewOrder: () => void;
   onSelectOrder: (order: Order) => void;
   onEditOrder: (order: Order, mode?: 'edit' | 'edit-request' | 'approve-override') => void;
@@ -93,6 +100,7 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
   orders,
   currentUser,
   fixedStatus,
+  onRefreshWorkspace,
   onOpenNewOrder,
   onSelectOrder,
   onEditOrder,
@@ -112,6 +120,17 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
   const [queriedOrders, setQueriedOrders] = useState<Order[] | null>(null);
   const [queriedRevenue, setQueriedRevenue] = useState<number | undefined>(undefined);
   const [isQueryLoading, setIsQueryLoading] = useState(false);
+
+  // Bulk Selection, Workflow Transition, Batch Print & Excel Export State
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkPreview, setBulkPreview] = useState<BulkPreviewResult | null>(null);
+  const [bulkTargetStatus, setBulkTargetStatus] = useState<OrderStatus | null>(null);
+  const [bulkPreviewLoading, setBulkPreviewLoading] = useState(false);
+  const [bulkExecuting, setBulkExecuting] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkBanner, setBulkBanner] = useState<string | null>(null);
+  const [showBatchPrint, setShowBatchPrint] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
 
   const [orderToDelete, setOrderToDelete] = useState<Order | null>(null);
   const [reviewingOrder, setReviewingOrder] = useState<Order | null>(null);
@@ -145,6 +164,7 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
     currentUser.canConfirmDelivery ||
     Boolean(currentUser.canManageOrderStatus);
   const canDelete = isStrictAdmin || Boolean(currentUser.canDeleteOrders);
+  const canBulkTransition = isStrictAdmin || currentUser.role === 'supervisor' || canManageStatus || canConfirm;
 
   const isDateFilterActive =
     dateFilter.preset !== 'all' || Boolean(dateFilter.dateFrom) || Boolean(dateFilter.dateTo);
@@ -285,6 +305,84 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
         .reduce((sum, o) => sum + o.totalAmount, 0),
     [filteredOrders]
   );
+
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectedOrders = useMemo(
+    () => filteredOrders.filter((o) => selectedIdSet.has(o.id)),
+    [filteredOrders, selectedIdSet]
+  );
+
+  const toggleOrderSelect = (orderId: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(orderId) ? prev.filter((id) => id !== orderId) : [...prev, orderId]
+    );
+  };
+
+  const toggleSelectAllFiltered = () => {
+    const allSelected =
+      filteredOrders.length > 0 && filteredOrders.every((o) => selectedIdSet.has(o.id));
+    setSelectedIds(allSelected ? [] : filteredOrders.map((o) => o.id));
+  };
+
+  const handleRequestBulkTransitionPreview = async (targetStatus: OrderStatus) => {
+    if (selectedIds.length === 0) return;
+    setBulkPreviewLoading(true);
+    setBulkError(null);
+    try {
+      const preview = await apiClient.previewBulkOrders({
+        orderIds: selectedIds,
+        targetStatus,
+      });
+      setBulkTargetStatus(targetStatus);
+      setBulkPreview(preview);
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : 'تعذر تجهيز معاينة تحديث حالات الطلبات.');
+    } finally {
+      setBulkPreviewLoading(false);
+    }
+  };
+
+  const handleExecuteBulkTransition = async () => {
+    if (!bulkTargetStatus || bulkExecuting) return;
+    setBulkExecuting(true);
+    setBulkError(null);
+    try {
+      const result = await apiClient.executeBulkOrders({
+        orderIds: selectedIds,
+        targetStatus: bulkTargetStatus,
+      });
+      setBulkPreview(null);
+      setBulkTargetStatus(null);
+      setSelectedIds([]);
+      setBulkBanner(result.message);
+      await onRefreshWorkspace?.();
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : 'تعذر تنفيذ تحديث حالات الطلبات.');
+    } finally {
+      setBulkExecuting(false);
+    }
+  };
+
+  const handleExportOrdersExcel = async () => {
+    setExportingExcel(true);
+    try {
+      const mapPreset = (p: DateFilterValue['preset']) => {
+        if (p === 'last_month') return 'previous_month';
+        if (p === 'last_7_days') return 'this_week';
+        return p;
+      };
+      await apiClient.downloadUnifiedReportExcel('sales', {
+        preset: mapPreset(dateFilter.preset) as 'all',
+        dateFrom: dateFilter.preset === 'custom' ? dateFilter.dateFrom : undefined,
+        dateTo: dateFilter.preset === 'custom' ? dateFilter.dateTo : undefined,
+        status: fixedStatus || (statusFilter !== 'الكل' && statusFilter !== 'طلبات التعديل' ? statusFilter : undefined),
+      });
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : 'تعذر تصدير الفواتير إلى Excel.');
+    } finally {
+      setExportingExcel(false);
+    }
+  };
 
   const handleConfirmDelete = () => {
     if (!orderToDelete) return;
@@ -450,13 +548,25 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
             />
           </div>
 
-          <button
-            onClick={onOpenNewOrder}
-            className="min-h-[48px] bg-[#0A468C] text-white px-5 py-3 rounded-2xl font-black shadow-md hover:bg-[#072F5F] transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap active:scale-[0.98]"
-          >
-            <Plus className="w-4 h-4" />
-            فاتورة جديدة
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={exportingExcel}
+              onClick={() => void handleExportOrdersExcel()}
+              className="min-h-[48px] bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-3 rounded-2xl font-black shadow-md transition-all flex items-center justify-center gap-2 text-xs sm:text-sm whitespace-nowrap disabled:opacity-50"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              {exportingExcel ? 'جاري التصدير...' : 'تصدير Excel'}
+            </button>
+
+            <button
+              onClick={onOpenNewOrder}
+              className="min-h-[48px] bg-[#0A468C] text-white px-5 py-3 rounded-2xl font-black shadow-md hover:bg-[#072F5F] transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap active:scale-[0.98]"
+            >
+              <Plus className="w-4 h-4" />
+              فاتورة جديدة
+            </button>
+          </div>
         </div>
 
         {/* Status Filter Tabs (Full view) or Sub-view indicator (Dedicated stage view) */}
@@ -509,7 +619,102 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
             )}
           </div>
         )}
+
+        {filteredOrders.length > 0 && (
+          <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 text-xs">
+            <button
+              type="button"
+              onClick={toggleSelectAllFiltered}
+              className="min-h-[36px] px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-[#072F5F] rounded-xl font-black inline-flex items-center gap-1.5"
+            >
+              {filteredOrders.every((o) => selectedIdSet.has(o.id)) ? (
+                <CheckSquare className="w-4 h-4 text-[#0A468C]" />
+              ) : (
+                <Square className="w-4 h-4 text-slate-400" />
+              )}
+              <span>تحديد كل الفواتير المعروضة ({filteredOrders.length})</span>
+            </button>
+          </div>
+        )}
       </div>
+
+      {bulkBanner && (
+        <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs font-black text-emerald-900 flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            {bulkBanner}
+          </span>
+          <button type="button" onClick={() => setBulkBanner(null)} className="font-bold underline">
+            إغلاق
+          </button>
+        </div>
+      )}
+
+      {bulkError && (
+        <div className="p-3.5 bg-red-50 border border-red-200 rounded-2xl text-xs font-black text-red-700">
+          {bulkError}
+        </div>
+      )}
+
+      {/* Sticky Bulk Action Bar for Orders */}
+      <BulkActionBar
+        selectedCount={selectedIds.length}
+        pageCount={filteredOrders.length}
+        totalMatchingCount={filteredOrders.length}
+        selectionScope="page"
+        onSelectPage={() => setSelectedIds(filteredOrders.map((o) => o.id))}
+        onClearSelection={() => setSelectedIds([])}
+        itemLabel="فاتورة"
+      >
+        <button
+          type="button"
+          onClick={() => setShowBatchPrint(true)}
+          className="px-3 py-1.5 rounded-xl bg-white text-[#072F5F] hover:bg-blue-50 font-black text-xs inline-flex items-center gap-1.5"
+        >
+          <Printer className="w-3.5 h-3.5" />
+          طباعة مجمّعة ({selectedOrders.length})
+        </button>
+
+        {canBulkTransition && (isStrictAdmin || canManageStatus) && (
+          <>
+            <button
+              type="button"
+              disabled={bulkPreviewLoading}
+              onClick={() => void handleRequestBulkTransitionPreview('جاري التجهيز')}
+              className="px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs"
+            >
+              بدء التجهيز
+            </button>
+            <button
+              type="button"
+              disabled={bulkPreviewLoading}
+              onClick={() => void handleRequestBulkTransitionPreview('تم التجهيز')}
+              className="px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs"
+            >
+              تم التجهيز
+            </button>
+            <button
+              type="button"
+              disabled={bulkPreviewLoading}
+              onClick={() => void handleRequestBulkTransitionPreview('تم الشحن')}
+              className="px-3 py-1.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs"
+            >
+              تم الشحن
+            </button>
+          </>
+        )}
+
+        {canBulkTransition && canConfirm && (
+          <button
+            type="button"
+            disabled={bulkPreviewLoading}
+            onClick={() => void handleRequestBulkTransitionPreview('تم التسليم')}
+            className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white font-black text-xs"
+          >
+            تأكيد التسليم
+          </button>
+        )}
+      </BulkActionBar>
 
       {/* Mobile-Friendly Cards View on Small Screens */}
       <div className="block lg:hidden space-y-3.5">
@@ -518,15 +723,25 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
           const canConfirmOutcomeOnOrder =
             order.status === 'تم الشحن' || order.status === 'قيد التنفيذ';
           const isHeld = Boolean(order.holdInfo?.isHeld);
+          const isSelected = selectedIdSet.has(order.id);
 
           return (
             <div
               key={order.id}
-              className="bg-white p-4 sm:p-5 rounded-3xl shadow-sm border border-slate-200/80 space-y-3.5"
+              className={`bg-white p-4 sm:p-5 rounded-3xl shadow-sm border space-y-3.5 ${
+                isSelected ? 'border-[#0A468C] ring-2 ring-blue-500/20' : 'border-slate-200/80'
+              }`}
             >
               <div className="flex justify-between items-start gap-2">
                 <div>
                   <div className="flex flex-wrap items-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleOrderSelect(order.id)}
+                      aria-label={`تحديد فاتورة ${order.id}`}
+                      className="w-4 h-4 accent-[#0A468C] cursor-pointer ml-1"
+                    />
                     <span className="font-mono text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-lg">
                       #{order.id.slice(0, 10)}
                     </span>
@@ -838,6 +1053,15 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
           <table className="w-full text-right border-collapse">
             <thead className="bg-slate-50 border-b border-slate-200/80">
               <tr>
+                <th className="p-4 text-center w-10">
+                  <input
+                    type="checkbox"
+                    checked={filteredOrders.length > 0 && filteredOrders.every((o) => selectedIdSet.has(o.id))}
+                    onChange={toggleSelectAllFiltered}
+                    aria-label="تحديد كل الفواتير"
+                    className="w-4 h-4 accent-[#0A468C] cursor-pointer"
+                  />
+                </th>
                 <th className="p-5 font-black text-xs text-slate-500">رقم الفاتورة</th>
                 <th className="p-5 font-black text-xs text-slate-500">العميل والتفاصيل</th>
                 <th className="p-5 font-black text-xs text-slate-500">السيلز</th>
@@ -854,9 +1078,24 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
                 const canConfirmOutcomeOnOrder =
                   order.status === 'تم الشحن' || order.status === 'قيد التنفيذ';
                 const isHeld = Boolean(order.holdInfo?.isHeld);
+                const isSelected = selectedIdSet.has(order.id);
 
                 return (
-                  <tr key={order.id} className="hover:bg-blue-50/30 transition-all">
+                  <tr
+                    key={order.id}
+                    className={`transition-all ${
+                      isSelected ? 'bg-blue-50/70' : 'hover:bg-blue-50/30'
+                    }`}
+                  >
+                    <td className="p-4 text-center align-top pt-6">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleOrderSelect(order.id)}
+                        aria-label={`تحديد فاتورة ${order.id}`}
+                        className="w-4 h-4 accent-[#0A468C] cursor-pointer"
+                      />
+                    </td>
                     <td className="p-5 align-top">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="font-mono text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg">
@@ -1487,6 +1726,143 @@ export const OrdersTab: React.FC<OrdersTabProps> = ({
           </div>
         </div>
       )}
+
+      {/* Bulk Orders Status Transition Preview Modal */}
+      {bulkTargetStatus && (
+        <BulkPreviewModal
+          preview={bulkPreview}
+          title={`معاينة نقل الفواتير إلى "${bulkTargetStatus}"`}
+          subtitle="الفواتير غير المستوفية لشروط التسلسل التشغيلي أو المعلقة أو التي تنتظر التوفير تُستبعد تلقائياً"
+          confirmLabel={`تأكيد النقل إلى "${bulkTargetStatus}"`}
+          confirmVariant={bulkTargetStatus === 'تم التسليم' ? 'primary' : 'amber'}
+          executing={bulkExecuting}
+          error={bulkError}
+          onCancel={() => {
+            if (!bulkExecuting) {
+              setBulkPreview(null);
+              setBulkTargetStatus(null);
+              setBulkError(null);
+            }
+          }}
+          onConfirm={() => void handleExecuteBulkTransition()}
+        />
+      )}
+
+      {/* In-App Batch Invoice Print Portal (renders outside .no-print wrapper) */}
+      {showBatchPrint &&
+        selectedOrders.length > 0 &&
+        createPortal(
+          <div
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[900] overflow-y-auto p-4 sm:p-8 print:static print:inset-auto print:bg-white print:p-0 print:overflow-visible font-cairo"
+            dir="rtl"
+          >
+            <div className="max-w-4xl mx-auto space-y-6">
+              <div className="bg-white rounded-3xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 shadow-xl no-print">
+                <div>
+                  <h3 className="text-lg font-black text-[#072F5F]">
+                    طباعة مجمّعة لـ {selectedOrders.length} فاتورة
+                  </h3>
+                  <p className="text-xs font-bold text-slate-500">
+                    معاينة جاهزة للطباعة أو الحفظ كـ PDF من المتصفح
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="min-h-[44px] px-5 py-2.5 bg-[#0A468C] hover:bg-[#072F5F] text-white rounded-2xl font-black text-xs inline-flex items-center gap-2"
+                  >
+                    <Printer className="w-4 h-4" />
+                    طباعة الآن
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowBatchPrint(false)}
+                    className="min-h-[44px] px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl font-bold text-xs"
+                  >
+                    إغلاق
+                  </button>
+                </div>
+              </div>
+
+              {selectedOrders.map((ord) => (
+                <div
+                  key={ord.id}
+                  className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-sm space-y-4 print:rounded-none print:border-b print:shadow-none print:break-after-page"
+                >
+                  <div className="flex items-start justify-between border-b border-slate-200 pb-4">
+                    <div>
+                      <h4 className="text-xl font-black text-[#072F5F]">
+                        Kima Scent — فاتورة #{ord.id}
+                      </h4>
+                      <p className="text-xs font-bold text-slate-600 mt-1">
+                        العميل: {ord.customerName} · {ord.customerPhone || 'بدون هاتف'}
+                      </p>
+                      {(ord.governorate || ord.customerAddress) && (
+                        <p className="text-xs font-bold text-slate-500">
+                          العنوان: {ord.governorate ? `${ord.governorate} — ` : ''}
+                          {ord.customerAddress}
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-left text-xs space-y-1 tabular-nums">
+                      <p className="font-black text-slate-900">الحالة: {ord.status}</p>
+                      <p className="font-bold text-slate-500">
+                        التاريخ: {new Date(ord.createdAt).toLocaleDateString('ar-EG')}
+                      </p>
+                      <p className="font-bold text-slate-600">السيلز: {ord.salesRepName}</p>
+                    </div>
+                  </div>
+
+                  <table className="w-full text-right border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-100 border-b border-slate-200">
+                        <th className="p-2.5 font-black text-slate-700">الصنف</th>
+                        <th className="p-2.5 font-black text-slate-700 text-center">الكمية</th>
+                        <th className="p-2.5 font-black text-slate-700 text-center">السعر</th>
+                        <th className="p-2.5 font-black text-slate-700 text-center">الإجمالي</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {ord.items.map((it, idx) => (
+                        <tr key={idx}>
+                          <td className="p-2.5 font-bold text-slate-900">
+                            {it.productName} {it.grade ? `(${it.grade})` : ''}
+                          </td>
+                          <td className="p-2.5 text-center font-bold tabular-nums">
+                            {it.quantity.toLocaleString()} {it.unit || 'mg'}
+                          </td>
+                          <td className="p-2.5 text-center font-bold tabular-nums">
+                            {it.price.toLocaleString()} ج.م
+                          </td>
+                          <td className="p-2.5 text-center font-black tabular-nums">
+                            {(it.quantity * it.price).toLocaleString()} ج.م
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  <div className="flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-slate-200 text-xs tabular-nums">
+                    <div className="space-x-4 space-x-reverse font-bold text-slate-600">
+                      <span>المجموع الفرعي: {ord.subtotal.toLocaleString()} ج.م</span>
+                      {ord.discountAmount > 0 && (
+                        <span>الخصم ({ord.discountPercentage}%): -{ord.discountAmount.toLocaleString()} ج.م</span>
+                      )}
+                      {ord.shippingCost > 0 && (
+                        <span>الشحن: {ord.shippingCost.toLocaleString()} ج.م</span>
+                      )}
+                    </div>
+                    <p className="text-base font-black text-[#072F5F]">
+                      الصافي المستحق: {ord.totalAmount.toLocaleString()} ج.م
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

@@ -13,6 +13,7 @@ import {
   SalesRep,
   OrderItem,
   OilGrade,
+  OilGradeRecord,
   Order,
   Customer,
   ItemSourcingSource,
@@ -30,6 +31,7 @@ import { classifyProductName } from '../src/lib/product-classifier';
 interface OrderFormModalProps {
   products: Product[];
   categories?: ProductCategory[];
+  oilGrades?: OilGradeRecord[];
   commissionConfig?: CommissionConfig;
   generalSettings?: SystemGeneralSettings;
   salesReps: SalesRep[];
@@ -45,11 +47,12 @@ interface OrderFormModalProps {
   ) => Promise<void> | void;
 }
 
-const OIL_GRADES: OilGrade[] = ['عالي (Code A)', 'وسط (Code B)', 'تجاري (Code C)'];
+const DEFAULT_GRADE_OPTIONS: OilGrade[] = ['عالي', 'وسط', 'تجاري'];
 
 export const OrderFormModal: React.FC<OrderFormModalProps> = ({
   products,
   categories = DEFAULT_CATEGORIES,
+  oilGrades = [],
   commissionConfig = DEFAULT_COMMISSION_CONFIG,
   generalSettings,
   salesReps,
@@ -98,7 +101,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
   const [itemNameInput, setItemNameInput] = useState<string>(activeProducts[0]?.name || '');
   const [customCategoryId, setCustomCategoryId] = useState<string>('cat-other');
   const [customUnit, setCustomUnit] = useState<ProductUnit>('قطعة');
-  const [itemGrade, setItemGrade] = useState<OilGrade>(activeProducts[0]?.grade || 'عالي (Code A)');
+  const [itemGrade, setItemGrade] = useState<OilGrade>(activeProducts[0]?.grade || 'عالي');
   const [itemQuantity, setItemQuantity] = useState<string>(
     activeProducts[0]?.unit === 'mg' || !activeProducts[0] ? '500' : '1'
   );
@@ -227,6 +230,23 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
     if (!cleanName) {
       setFormError('يرجى كتابة اسم الصنف أو اختياره من المخزن');
       return;
+    }
+
+    if (!matchedProduct) {
+      const cleanLower = cleanName.toLowerCase();
+      const archivedMatch = products.find(
+        (p) =>
+          p.isActive === false &&
+          ((p.code && p.code.trim().toLowerCase() === cleanLower) ||
+            (p.name.trim().toLowerCase() === cleanLower &&
+              (p.categoryId !== 'cat-oils' || p.grade === itemGrade)))
+      );
+      if (archivedMatch) {
+        setFormError(
+          `الصنف "${archivedMatch.name}" مؤرشف حالياً ولا يمكن إضافته لفاتورة جديدة. يمكن استعادته من المخزون أولاً.`
+        );
+        return;
+      }
     }
 
     const qty = parseFloat(itemQuantity);
@@ -933,7 +953,10 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                           onChange={(e) => setItemGrade(e.target.value as OilGrade)}
                           className="w-full min-h-[42px] px-3 py-2 bg-slate-50 rounded-xl font-bold outline-none border border-slate-200 text-xs sm:text-sm"
                         >
-                          {OIL_GRADES.map((g) => (
+                          {(oilGrades.filter((g) => g.isActive !== false).length > 0
+                            ? oilGrades.filter((g) => g.isActive !== false).map((g) => g.name)
+                            : DEFAULT_GRADE_OPTIONS
+                          ).map((g) => (
                             <option key={g} value={g}>
                               {g}
                             </option>

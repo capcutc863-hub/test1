@@ -16,7 +16,10 @@ import {
   signOwnerStepUpToken,
   verifyPassword,
 } from './src/lib/auth-utils.ts';
-import { extractPriceListFromPdfBuffer } from './src/lib/pdf-price-importer.ts';
+import {
+  decodeUploadedFilename,
+  extractPriceListFromPdfBuffer,
+} from './src/lib/pdf-price-importer.ts';
 import { db, isTransientDbError } from './src/db/index.ts';
 import { products as productsTable } from './src/db/schema.ts';
 import {
@@ -25,9 +28,13 @@ import {
   cancelPriceListImportRecord,
   claimInitialOwnerRoleRecord,
   createCategoryRecord,
+  createOilGradeRecord,
   createPriceListImportRecord,
+  deletePriceListImportRecords,
   exportFullDatabaseSnapshotForOwner,
   getAllCategories,
+  getAllOilGrades,
+  getGeneralSystemSettings,
   getOwnerBootstrapStatus,
   getOwnerOverviewData,
   getPriceListImportHistory,
@@ -38,6 +45,7 @@ import {
   setOwnerRecoveryKeyRecord,
   updateCategoryRecord,
   updateCommissionConfigRecord,
+  updateOilGradeRecord,
   updateSystemGeneralSettingsRecord,
 } from './src/db/catalogQueries.ts';
 import {
@@ -72,6 +80,7 @@ import {
   isCancelledOrReturnedStatus,
   isSalesDirectEditableStatus,
   isSalesEditRequestStatus,
+  listExternalSourcingRecords,
   manageOrderItemSourcingRecord,
   queryOrdersForUser,
   resolveOrderEditRequestRecord,
@@ -79,6 +88,7 @@ import {
   setProductArchiveStatusRecord,
   submitOrderEditRequestRecord,
   updateCustomerRecord,
+  updateExternalSourcingCostRecord,
   updateOrderOperationalNotesRecord,
   updateOrderRecord,
   updateOrderStatusRecord,
@@ -87,13 +97,37 @@ import {
   updateTeamMemberRecord,
   type StatusTransitionOptions,
 } from './src/db/queries.ts';
+import {
+  getCustomerAnalytics,
+  getOwnerBiDashboardData,
+  getReorderRecommendations,
+  getSalesRepAnalytics,
+  getUnifiedReportData,
+} from './src/db/analyticsQueries.ts';
+import {
+  executeBulkCustomersAction,
+  executeBulkInventoryAction,
+  executeBulkOrdersTransition,
+  executeBulkProductsAction,
+  previewBulkCustomersAction,
+  previewBulkInventoryAction,
+  previewBulkOrdersTransition,
+  previewBulkProductsAction,
+} from './src/db/bulkQueries.ts';
+import { buildUnifiedReportWorkbookBuffer } from './src/lib/excel-exporter.ts';
 import type {
+  BiFilterParams,
+  BiPeriodPreset,
+  CustomerRepeatFilter,
+  GranularResetGroupId,
   OrderDateField,
   OrderDatePreset,
   OrderEditRequest,
   OrderStatus,
   PriceListColumnMapping,
   PriceListParsedItem,
+  SystemResetScope,
+  UnifiedReportType,
 } from './types.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -655,7 +689,7 @@ app.delete('/api/orders/:id', requireAuth, async (req: AuthRequest, res) => {
 // Customers endpoints
 app.post('/api/customers', requireAuth, async (req: AuthRequest, res) => {
   try {
-    const newCustomer = await createCustomerRecord(req.body);
+    const newCustomer = await createCustomerRecord(req.body, req.staffUser);
     res.status(201).json(newCustomer);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to create customer';
@@ -1371,6 +1405,8 @@ app.post(
       const body = (req.body || {}) as {
         mode?: string;
         customerAction?: 'archive_only' | 'reset_balances' | 'delete_unlinked_and_demo' | 'delete_all';
+        archiveProtectedCatalog?: boolean;
+        resetGroups?: GranularResetGroupId[];
       };
       const allowedModes = new Set([
         'reset_sales',
@@ -1379,19 +1415,17 @@ app.post(
         'reset_demo_products',
         'reset_extras',
         'reset_full',
+        'remove_catalog',
+        'reset_groups',
       ]);
       if (!body.mode || !allowedModes.has(body.mode)) {
         return res.status(400).json({ error: 'نوع التصفير المطلوب غير صالح.' });
       }
       const preview = await previewSystemReset({
-        mode: body.mode as
-          | 'reset_sales'
-          | 'reset_stock'
-          | 'reset_customers'
-          | 'reset_demo_products'
-          | 'reset_extras'
-          | 'reset_full',
+        mode: body.mode as SystemResetScope['mode'],
         customerAction: body.customerAction,
+        archiveProtectedCatalog: Boolean(body.archiveProtectedCatalog),
+        resetGroups: Array.isArray(body.resetGroups) ? body.resetGroups : undefined,
       });
       res.json(preview);
     } catch (error: unknown) {
@@ -1418,6 +1452,8 @@ app.post(
         clearChatMessages?: boolean;
         clearPriceListImports?: boolean;
         clearOperationalLogs?: boolean;
+        archiveProtectedCatalog?: boolean;
+        resetGroups?: GranularResetGroupId[];
         reason?: string;
         confirmationPhrase?: string;
         verifiedBackupId?: string;
@@ -1430,6 +1466,8 @@ app.post(
         'reset_demo_products',
         'reset_extras',
         'reset_full',
+        'remove_catalog',
+        'reset_groups',
       ]);
       if (!body.mode || !allowedModes.has(body.mode)) {
         return res.status(400).json({ error: 'نوع التصفير المطلوب غير صالح.' });
@@ -1437,13 +1475,7 @@ app.post(
 
       const result = await executeSystemReset(
         {
-          mode: body.mode as
-            | 'reset_sales'
-            | 'reset_stock'
-            | 'reset_customers'
-            | 'reset_demo_products'
-            | 'reset_extras'
-            | 'reset_full',
+          mode: body.mode as SystemResetScope['mode'],
           customerAction: body.customerAction,
           selectedDemoProductIds: Array.isArray(body.selectedDemoProductIds)
             ? body.selectedDemoProductIds.map((x) => String(x))
@@ -1451,6 +1483,8 @@ app.post(
           clearChatMessages: Boolean(body.clearChatMessages),
           clearPriceListImports: Boolean(body.clearPriceListImports),
           clearOperationalLogs: Boolean(body.clearOperationalLogs),
+          archiveProtectedCatalog: Boolean(body.archiveProtectedCatalog),
+          resetGroups: Array.isArray(body.resetGroups) ? body.resetGroups : undefined,
           reason: typeof body.reason === 'string' ? body.reason : undefined,
           confirmationPhrase:
             typeof body.confirmationPhrase === 'string' ? body.confirmationPhrase : undefined,
@@ -1537,6 +1571,45 @@ app.put('/api/categories/:id', requireAuth, requireOwner, requireOwnerStepUp, as
   }
 });
 
+// Dynamic Oil Grades Management (accessible for read by all auth users; Owner-only for create/update)
+app.get('/api/oil-grades', requireAuth, async (_req: AuthRequest, res) => {
+  try {
+    const list = await getAllOilGrades();
+    res.json(list);
+  } catch (error: unknown) {
+    res.status(500).json({ error: getSafeErrorMessage(error, 'فشل تحميل درجات الزيوت.') });
+  }
+});
+
+app.post('/api/oil-grades', requireAuth, requireOwner, async (req: AuthRequest, res) => {
+  try {
+    const created = await createOilGradeRecord(req.body || {}, req.staffUser!);
+    res.status(201).json(created);
+  } catch (error: unknown) {
+    const message = getSafeErrorMessage(error, 'فشل إضافة درجة الزيت.');
+    const statusCode = message.includes('مسبقاً') ? 409 : message.includes('يرجى إدخال') ? 400 : 500;
+    res.status(statusCode).json({ error: message });
+  }
+});
+
+app.put('/api/oil-grades/:id', requireAuth, requireOwner, async (req: AuthRequest, res) => {
+  try {
+    const updated = await updateOilGradeRecord(
+      { ...(req.body || {}), id: String(req.params.id) },
+      req.staffUser!
+    );
+    res.json(updated);
+  } catch (error: unknown) {
+    const message = getSafeErrorMessage(error, 'فشل تحديث درجة الزيت.');
+    const statusCode = message.includes('غير موجودة')
+      ? 404
+      : message.includes('نفس الاسم')
+        ? 409
+        : 500;
+    res.status(statusCode).json({ error: message });
+  }
+});
+
 // PDF Price List Import & Preview (Strictly Owner Only — 403 for Admin, Supervisor, Sales)
 app.post(
   '/api/price-lists/import',
@@ -1563,12 +1636,12 @@ app.post(
 
       if (req.file) {
         buffer = req.file.buffer;
-        fileName = req.file.originalname || 'price-list.pdf';
+        fileName = decodeUploadedFilename(req.file.originalname || 'price-list.pdf');
         mimeType = req.file.mimetype || 'application/pdf';
       } else if (typeof req.body?.fileBase64 === 'string' && req.body.fileBase64.trim()) {
         const cleanB64 = req.body.fileBase64.replace(/^data:application\/pdf;base64,/, '');
         buffer = Buffer.from(cleanB64, 'base64');
-        fileName = (req.body.fileName || 'price-list.pdf').toString();
+        fileName = decodeUploadedFilename((req.body.fileName || 'price-list.pdf').toString());
       }
 
       if (!buffer || buffer.length === 0) {
@@ -1596,9 +1669,10 @@ app.post(
         }
       }
 
-      const [allProdRows, categories] = await Promise.all([
+      const [allProdRows, categories, gradesCatalog] = await Promise.all([
         db.select().from(productsTable),
         getAllCategories(),
+        getAllOilGrades(),
       ]);
       if (rawListCatId && !categories.some((c) => c.id === rawListCatId)) {
         return res.status(400).json({ error: 'التصنيف المحدد لقائمة الأسعار غير موجود في الكتالوج.' });
@@ -1608,6 +1682,7 @@ app.post(
       const extraction = await extractPriceListFromPdfBuffer(buffer, existingProducts, categories, {
         listCategoryId: rawListCatId,
         columnMapping: parsedColumnMapping,
+        oilGrades: gradesCatalog,
       });
       const savedImport = await createPriceListImportRecord({
         fileName,
@@ -1617,6 +1692,7 @@ app.post(
         listCategoryId: extraction.listCategoryId ?? rawListCatId,
         listCategoryName: extraction.listCategoryName ?? null,
         columnMapping: extraction.columnMapping ?? parsedColumnMapping,
+        importConfig: extraction.importConfig ?? null,
         rawTableRows: extraction.rawTableRows ?? null,
         extractionMethod: extraction.extractionMethod,
         parsedItems: extraction.parsedItems,
@@ -1719,7 +1795,10 @@ app.post(
         ? 404
         : message.includes('مسبقاً') || message.includes('مكرر')
           ? 409
-          : message.includes('غير محدد') || message.includes('كود') || message.includes('سعر')
+          : message.includes('غير محدد') ||
+              message.includes('كود') ||
+              message.includes('سعر') ||
+              message.includes('وحدة')
             ? 400
             : 500;
       res.status(statusCode).json({ error: message });
@@ -1737,6 +1816,44 @@ app.post('/api/price-lists/:id/cancel', requireAuth, requireOwner, async (req: A
     res.status(500).json({ error: message });
   }
 });
+
+// Delete archived price list batch record(s) — Strictly Owner Only + Step-Up
+// Only removes the archive record and its attached inline PDF; never touches live catalog/stock/orders.
+app.delete(
+  '/api/price-lists/:id',
+  requireAuth,
+  requireOwner,
+  requireOwnerStepUp,
+  async (req: AuthRequest, res) => {
+    try {
+      const id = String(req.params.id);
+      const result = await deletePriceListImportRecords([id], req.staffUser!);
+      res.json(result);
+    } catch (error: unknown) {
+      const message = getSafeErrorMessage(error, 'فشل حذف دفعة الاستيراد المؤرشفة.');
+      const statusCode = message.includes('غير موجودة') ? 404 : message.includes('يرجى تحديد') ? 400 : 500;
+      res.status(statusCode).json({ error: message });
+    }
+  }
+);
+
+app.post(
+  '/api/price-lists/archive/delete',
+  requireAuth,
+  requireOwner,
+  requireOwnerStepUp,
+  async (req: AuthRequest, res) => {
+    try {
+      const ids = Array.isArray(req.body?.ids) ? (req.body.ids as string[]) : [];
+      const result = await deletePriceListImportRecords(ids, req.staffUser!);
+      res.json(result);
+    } catch (error: unknown) {
+      const message = getSafeErrorMessage(error, 'فشل حذف دفعات الاستيراد المؤرشفة المحددة.');
+      const statusCode = message.includes('غير موجودة') ? 404 : message.includes('يرجى تحديد') ? 400 : 500;
+      res.status(statusCode).json({ error: message });
+    }
+  }
+);
 
 // Team chat endpoint (server enforces sender identity from verified auth token)
 app.post('/api/chat', requireAuth, async (req: AuthRequest, res) => {
@@ -1804,6 +1921,360 @@ app.post('/api/marketing-insight', requireAuth, async (req: AuthRequest, res) =>
   } catch (error: unknown) {
     console.error('Gemini Error:', error);
     res.status(500).json({ error: 'عذراً، حدث خطأ أثناء توليد الاقتراحات التسويقية.' });
+  }
+});
+
+// =====================================================================
+// BI ANALYTICS, REPORTS, REAL .XLSX EXPORT, BULK OPERATIONS & EXTERNAL SOURCING
+// =====================================================================
+
+function parseBiFilterQuery(query: Record<string, unknown>): BiFilterParams {
+  return {
+    preset: (typeof query.preset === 'string' ? query.preset : undefined) as BiPeriodPreset | undefined,
+    dateFrom: typeof query.dateFrom === 'string' && query.dateFrom ? query.dateFrom : undefined,
+    dateTo: typeof query.dateTo === 'string' && query.dateTo ? query.dateTo : undefined,
+    salesRepId: typeof query.salesRepId === 'string' && query.salesRepId ? query.salesRepId : undefined,
+    categoryId: typeof query.categoryId === 'string' && query.categoryId ? query.categoryId : undefined,
+    productId: typeof query.productId === 'string' && query.productId ? query.productId : undefined,
+    status: typeof query.status === 'string' && query.status ? query.status : undefined,
+    customerClassification:
+      typeof query.customerClassification === 'string' && query.customerClassification
+        ? query.customerClassification
+        : undefined,
+    stockSource: (typeof query.stockSource === 'string' ? query.stockSource : undefined) as BiFilterParams['stockSource'],
+    topLimit: query.topLimit ? Number(query.topLimit) : undefined,
+  };
+}
+
+const VALID_REPORT_TYPES = new Set<UnifiedReportType>([
+  'sales',
+  'sales_reps',
+  'commissions',
+  'categories',
+  'products',
+  'customers',
+  'repeat_customers',
+  'inventory_valuation',
+  'stock_movements',
+  'external_sourcing',
+  'invoice_status',
+  'operations_performance',
+]);
+
+app.get('/api/analytics/owner-bi', requireAuth, requireOwner, async (req: AuthRequest, res) => {
+  try {
+    const filters = parseBiFilterQuery(req.query as Record<string, unknown>);
+    const data = await getOwnerBiDashboardData(filters);
+    res.json(data);
+  } catch (error: unknown) {
+    res.status(500).json({ error: getSafeErrorMessage(error, 'فشل تحميل لوحة التحليلات التنفيذية.') });
+  }
+});
+
+app.get('/api/analytics/sales-reps', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (!user) return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً.' });
+
+  try {
+    const filters = parseBiFilterQuery(req.query as Record<string, unknown>);
+    if (user.role === 'sales') {
+      if (filters.salesRepId && filters.salesRepId !== 'all' && filters.salesRepId !== user.salesRepId) {
+        return res.status(403).json({ error: 'غير مسموح بالاطلاع على أداء مندوب آخر.' });
+      }
+      filters.salesRepId = user.salesRepId || '__none__';
+    } else if (!isPrivilegedManagerRole(user.role) && user.role !== 'supervisor') {
+      return res.status(403).json({ error: 'ليس لديك صلاحية الاطلاع على تحليلات المناديب.' });
+    }
+    const data = await getSalesRepAnalytics(filters);
+    res.json(data);
+  } catch (error: unknown) {
+    res.status(500).json({ error: getSafeErrorMessage(error, 'فشل تحميل تحليلات المناديب.') });
+  }
+});
+
+app.get('/api/analytics/customers', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (!user) return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً.' });
+
+  try {
+    const q = req.query as Record<string, unknown>;
+    const data = await getCustomerAnalytics(user, {
+      ...parseBiFilterQuery(q),
+      repeatFilter: (typeof q.repeatFilter === 'string' ? q.repeatFilter : undefined) as CustomerRepeatFilter | undefined,
+      customMinOrders: q.customMinOrders ? Number(q.customMinOrders) : undefined,
+      dormancyDays: q.dormancyDays ? Number(q.dormancyDays) : undefined,
+      search: typeof q.search === 'string' ? q.search : undefined,
+      sortBy: typeof q.sortBy === 'string' ? (q.sortBy as 'periodSpent') : undefined,
+      sortDir: q.sortDir === 'asc' || q.sortDir === 'desc' ? q.sortDir : undefined,
+    });
+    res.json(data);
+  } catch (error: unknown) {
+    const statusCode = (error as { statusCode?: number }).statusCode || 500;
+    res.status(statusCode).json({ error: getSafeErrorMessage(error, 'فشل تحميل تحليلات العملاء.') });
+  }
+});
+
+app.get('/api/analytics/reorder-recommendations', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (
+    !user ||
+    (!isPrivilegedManagerRole(user.role) &&
+      user.role !== 'supervisor' &&
+      !user.canEditInventory &&
+      !user.canManageOrderStatus)
+  ) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية الاطلاع على توصيات إعادة التوريد.' });
+  }
+  try {
+    const q = req.query as Record<string, unknown>;
+    const data = await getReorderRecommendations({
+      lookbackDays: q.lookbackDays ? Number(q.lookbackDays) : undefined,
+      leadTimeDays: q.leadTimeDays ? Number(q.leadTimeDays) : undefined,
+      safetyDays: q.safetyDays ? Number(q.safetyDays) : undefined,
+      categoryId: typeof q.categoryId === 'string' ? q.categoryId : undefined,
+    });
+    res.json(data);
+  } catch (error: unknown) {
+    res.status(500).json({ error: getSafeErrorMessage(error, 'فشل حساب توصيات إعادة التوريد.') });
+  }
+});
+
+app.get('/api/external-sourcing', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (!user || (!isPrivilegedManagerRole(user.role) && !user.canManageOrderStatus && !user.canEditInventory)) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية الاطلاع على سجل التوفير الخارجي.' });
+  }
+  try {
+    const q = req.query as Record<string, string | undefined>;
+    const rows = await listExternalSourcingRecords({
+      orderId: q.orderId,
+      productId: q.productId,
+      dateFrom: q.dateFrom,
+      dateTo: q.dateTo,
+    });
+    res.json(rows);
+  } catch (error: unknown) {
+    res.status(500).json({ error: getSafeErrorMessage(error, 'فشل تحميل سجل التوفير الخارجي.') });
+  }
+});
+
+app.patch('/api/external-sourcing/:id', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (!user || (!isPrivilegedManagerRole(user.role) && !user.canManageOrderStatus)) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية تحديث تكاليف التوفير الخارجي.' });
+  }
+  try {
+    const updated = await updateExternalSourcingCostRecord(String(req.params.id), req.body || {}, user);
+    res.json(updated);
+  } catch (error: unknown) {
+    const msg = getSafeErrorMessage(error, 'فشل تحديث سجل التوفير الخارجي.');
+    res.status(msg.includes('غير موجود') ? 404 : 500).json({ error: msg });
+  }
+});
+
+app.get('/api/reports/:reportType', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (!user) return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً.' });
+  const rt = String(req.params.reportType) as UnifiedReportType;
+  if (!VALID_REPORT_TYPES.has(rt)) {
+    return res.status(400).json({ error: 'نوع التقرير المطلوب غير مدعوم.' });
+  }
+  try {
+    const q = req.query as Record<string, unknown>;
+    const data = await getUnifiedReportData(rt, user, {
+      ...parseBiFilterQuery(q),
+      repeatFilter: (typeof q.repeatFilter === 'string' ? q.repeatFilter : undefined) as CustomerRepeatFilter | undefined,
+      dormancyDays: q.dormancyDays ? Number(q.dormancyDays) : undefined,
+      search: typeof q.search === 'string' ? q.search : undefined,
+    });
+    res.json(data);
+  } catch (error: unknown) {
+    const statusCode = (error as { statusCode?: number }).statusCode || 500;
+    res.status(statusCode).json({ error: getSafeErrorMessage(error, 'فشل توليد التقرير.') });
+  }
+});
+
+app.get('/api/reports/:reportType/export.xlsx', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (!user) return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً.' });
+  const rt = String(req.params.reportType) as UnifiedReportType;
+  if (!VALID_REPORT_TYPES.has(rt)) {
+    return res.status(400).json({ error: 'نوع التقرير المطلوب غير مدعوم.' });
+  }
+  try {
+    const q = req.query as Record<string, unknown>;
+    const [report, settings] = await Promise.all([
+      getUnifiedReportData(rt, user, {
+        ...parseBiFilterQuery(q),
+        repeatFilter: (typeof q.repeatFilter === 'string' ? q.repeatFilter : undefined) as CustomerRepeatFilter | undefined,
+        dormancyDays: q.dormancyDays ? Number(q.dormancyDays) : undefined,
+        search: typeof q.search === 'string' ? q.search : undefined,
+      }),
+      getGeneralSystemSettings(),
+    ]);
+    const xlsxBuffer = await buildUnifiedReportWorkbookBuffer(
+      report,
+      user.name,
+      settings.companyName || 'Kima Scent Wholesale'
+    );
+    const safeFileName = `KimaScent-${rt}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(safeFileName)}`
+    );
+    res.send(xlsxBuffer);
+  } catch (error: unknown) {
+    const statusCode = (error as { statusCode?: number }).statusCode || 500;
+    res.status(statusCode).json({ error: getSafeErrorMessage(error, 'فشل تصدير ملف Excel.') });
+  }
+});
+
+app.post('/api/bulk/products/preview', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (!user || (!isPrivilegedManagerRole(user.role) && !user.canEditInventory)) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية تنفيذ عمليات جماعية على المنتجات.' });
+  }
+  try {
+    const preview = await previewBulkProductsAction(req.body, user);
+    res.json(preview);
+  } catch (error: unknown) {
+    const msg = getSafeErrorMessage(error, 'فشل تجهيز معاينة الإجراء الجماعي.');
+    res.status(msg.includes('المالك') ? 403 : msg.includes('يرجى') ? 400 : 500).json({ error: msg });
+  }
+});
+
+app.post('/api/bulk/products/execute', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (!user || (!isPrivilegedManagerRole(user.role) && !user.canEditInventory)) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية تنفيذ عمليات جماعية على المنتجات.' });
+  }
+  try {
+    const result = await executeBulkProductsAction(req.body, user);
+    res.json(result);
+  } catch (error: unknown) {
+    const msg = getSafeErrorMessage(error, 'فشل تنفيذ الإجراء الجماعي على المنتجات.');
+    res.status(msg.includes('المالك') ? 403 : msg.includes('يرجى') ? 400 : 500).json({ error: msg });
+  }
+});
+
+app.post('/api/bulk/inventory/preview', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (!user || (!isPrivilegedManagerRole(user.role) && !user.canEditInventory)) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية تسوية أو إضافة أرصدة المخزون.' });
+  }
+  try {
+    const preview = await previewBulkInventoryAction(req.body);
+    res.json(preview);
+  } catch (error: unknown) {
+    const msg = getSafeErrorMessage(error, 'فشل تجهيز معاينة تسوية المخزون.');
+    res.status(msg.includes('يرجى') || msg.includes('سالب') || msg.includes('أكبر') ? 400 : 500).json({ error: msg });
+  }
+});
+
+app.post('/api/bulk/inventory/execute', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (!user || (!isPrivilegedManagerRole(user.role) && !user.canEditInventory)) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية تسوية أو إضافة أرصدة المخزون.' });
+  }
+  try {
+    const result = await executeBulkInventoryAction(req.body, user);
+    res.json(result);
+  } catch (error: unknown) {
+    const msg = getSafeErrorMessage(error, 'فشل تنفيذ تعديل المخزون الجماعي.');
+    res.status(msg.includes('يجب') || msg.includes('يرجى') || msg.includes('سالب') ? 400 : 500).json({ error: msg });
+  }
+});
+
+app.post('/api/bulk/customers/preview', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (!user || (!isPrivilegedManagerRole(user.role) && user.role !== 'supervisor')) {
+    return res.status(403).json({ error: 'صلاحية الإجراءات الجماعية للعملاء للإدارة أو المشرف فقط.' });
+  }
+  if (req.body?.action === 'delete_unlinked' && !isPrivilegedManagerRole(user.role) && !user.canDeleteCustomers) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية حذف العملاء.' });
+  }
+  try {
+    const preview = await previewBulkCustomersAction(req.body);
+    res.json(preview);
+  } catch (error: unknown) {
+    res.status(400).json({ error: getSafeErrorMessage(error, 'فشل معاينة إجراء العملاء.') });
+  }
+});
+
+app.post('/api/bulk/customers/execute', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (!user || (!isPrivilegedManagerRole(user.role) && user.role !== 'supervisor')) {
+    return res.status(403).json({ error: 'صلاحية الإجراءات الجماعية للعملاء للإدارة أو المشرف فقط.' });
+  }
+  if (req.body?.action === 'delete_unlinked' && !isPrivilegedManagerRole(user.role) && !user.canDeleteCustomers) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية حذف العملاء.' });
+  }
+  try {
+    const result = await executeBulkCustomersAction(req.body, user);
+    res.json(result);
+  } catch (error: unknown) {
+    res.status(400).json({ error: getSafeErrorMessage(error, 'فشل تنفيذ إجراء العملاء.') });
+  }
+});
+
+app.post('/api/bulk/orders/preview', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (
+    !user ||
+    (!isPrivilegedManagerRole(user.role) &&
+      user.role !== 'supervisor' &&
+      !user.canManageOrderStatus &&
+      !user.canConfirmDelivery)
+  ) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية تغيير حالات الطلبات جماعياً.' });
+  }
+  try {
+    const preview = await previewBulkOrdersTransition(req.body, user);
+    res.json(preview);
+  } catch (error: unknown) {
+    res.status(400).json({ error: getSafeErrorMessage(error, 'فشل معاينة تحديث الفواتير.') });
+  }
+});
+
+app.post('/api/bulk/orders/execute', requireAuth, async (req: AuthRequest, res) => {
+  const user = req.staffUser;
+  if (
+    !user ||
+    (!isPrivilegedManagerRole(user.role) &&
+      user.role !== 'supervisor' &&
+      !user.canManageOrderStatus &&
+      !user.canConfirmDelivery)
+  ) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية تغيير حالات الطلبات جماعياً.' });
+  }
+  const targetStatus = req.body?.targetStatus as OrderStatus | undefined;
+  const isTerminal =
+    targetStatus === 'تم التسليم' || targetStatus === 'مرتجع' || targetStatus === 'رفض استلام';
+  if (
+    isTerminal &&
+    !isPrivilegedManagerRole(user.role) &&
+    user.role !== 'supervisor' &&
+    !user.canConfirmDelivery &&
+    !user.canManageOrderStatus
+  ) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية تأكيد التسليم أو المرتجعات.' });
+  }
+  if (
+    !isTerminal &&
+    !isPrivilegedManagerRole(user.role) &&
+    !user.canManageOrderStatus
+  ) {
+    return res.status(403).json({ error: 'ليس لديك صلاحية إدارة حالات التجهيز والشحن.' });
+  }
+  try {
+    const result = await executeBulkOrdersTransition(req.body, user);
+    res.json(result);
+  } catch (error: unknown) {
+    res.status(400).json({ error: getSafeErrorMessage(error, 'فشل تنفيذ تحديث الفواتير الجماعي.') });
   }
 });
 

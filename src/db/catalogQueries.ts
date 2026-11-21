@@ -1,4 +1,4 @@
-import { desc, eq, sql } from 'drizzle-orm';
+import { asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db, withDbRetry } from './index.ts';
 import {
   getOwnerSystemOverviewCounts,
@@ -9,10 +9,12 @@ import {
   chatMessages,
   commissionSettingLogs,
   customers,
+  oilGrades,
   orderRevisions,
   orders,
   priceListImports,
   productCategories,
+  productPriceHistory,
   products,
   salesReps,
   stockMovements,
@@ -29,16 +31,21 @@ import {
 } from '../lib/commission-utils.ts';
 import { normalizeArabicForSearch } from '../lib/product-classifier.ts';
 import {
+  DEFAULT_OIL_GRADES,
+  decodeUploadedFilename,
   extractPriceListFromPdfBuffer,
   remapParsedTableRows,
+  resolveOilGradeMatch,
 } from '../lib/pdf-price-importer.ts';
 import type {
   AuditLogEntry,
   CommissionConfig,
   CommissionMode,
   CommissionSettingLog,
+  OilGradeRecord,
   OwnerCommissionAnalytics,
   PriceListColumnMapping,
+  PriceListImportConfig,
   PriceListImportRecord,
   PriceListParsedItem,
   Product,
@@ -84,8 +91,12 @@ export function mapProductRow(p: typeof products.$inferSelect): Product {
     description: p.description ?? undefined,
     unit: p.unit || 'mg',
     grade: p.grade ?? '',
+    gradeId: p.gradeId ?? null,
+    baseProductName: p.baseProductName ?? null,
+    baseProductKey: p.baseProductKey ?? null,
     pricePerMg: p.pricePerMg,
     costPrice: p.costPrice ?? null,
+    costUpdatedAt: p.costUpdatedAt ?? null,
     stock: p.stock,
     isActive: p.isActive ?? true,
     isCommissionEligible:
@@ -95,6 +106,20 @@ export function mapProductRow(p: typeof products.$inferSelect): Product {
     customCommissionFixed: p.customCommissionFixed ?? null,
     createdAt: p.createdAt ?? undefined,
     updatedAt: p.updatedAt ?? undefined,
+  };
+}
+
+export function mapOilGradeRow(g: typeof oilGrades.$inferSelect): OilGradeRecord {
+  return {
+    id: g.id,
+    name: g.name,
+    slug: g.slug,
+    sortOrder: g.sortOrder,
+    isActive: g.isActive,
+    aliases: Array.isArray(g.aliases) ? g.aliases : [],
+    description: g.description ?? null,
+    createdAt: g.createdAt || undefined,
+    updatedAt: g.updatedAt || undefined,
   };
 }
 
@@ -116,6 +141,24 @@ export async function ensureCatalogAndSettingsSeeded(): Promise<void> {
         isActive: cat.isActive,
         description: cat.description ?? null,
         createdAt: nowIso,
+      })
+      .onConflictDoNothing();
+  }
+
+  // 1b. Seed default oil grades (عالي / وسط / تجاري) non-destructively
+  for (const grade of DEFAULT_OIL_GRADES) {
+    await db
+      .insert(oilGrades)
+      .values({
+        id: grade.id,
+        name: grade.name,
+        slug: grade.slug,
+        sortOrder: grade.sortOrder,
+        isActive: grade.isActive,
+        aliases: grade.aliases,
+        description: grade.description ?? null,
+        createdAt: nowIso,
+        updatedAt: nowIso,
       })
       .onConflictDoNothing();
   }
@@ -212,6 +255,203 @@ export async function ensureCatalogAndSettingsSeeded(): Promise<void> {
 export async function getAllCategories(): Promise<ProductCategory[]> {
   const rows = await db.select().from(productCategories);
   return rows.map(mapCategoryRow).sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+async function ensureOilGradesSeeded(executor: {
+  select: typeof db.select;
+  insert: typeof db.insert;
+} = db): Promise<void> {
+  const existing = await executor
+    .select({ id: oilGrades.id })
+    .from(oilGrades)
+    .limit(1);
+  if (existing.length > 0) return;
+  const nowIso = new Date().toISOString();
+  for (const grade of DEFAULT_OIL_GRADES) {
+    await executor
+      .insert(oilGrades)
+      .values({
+        id: grade.id,
+        name: grade.name,
+        slug: grade.slug,
+        sortOrder: grade.sortOrder,
+        isActive: grade.isActive,
+        aliases: grade.aliases,
+        description: grade.description ?? null,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      })
+      .onConflictDoNothing();
+  }
+}
+
+export async function getAllOilGrades(): Promise<OilGradeRecord[]> {
+  await ensureOilGradesSeeded();
+  const rows = await db
+    .select()
+    .from(oilGrades)
+    .orderBy(asc(oilGrades.sortOrder), asc(oilGrades.id));
+  if (rows.length === 0) return DEFAULT_OIL_GRADES;
+  return rows.map(mapOilGradeRow);
+}
+
+export async function createOilGradeRecord(
+  input: {
+    name: string;
+    slug?: string;
+    sortOrder?: number;
+    isActive?: boolean;
+    aliases?: string[];
+    description?: string | null;
+  },
+  actor: User
+): Promise<OilGradeRecord> {
+  const cleanName = (input.name || '').trim();
+  const cleanSlug = (input.slug || cleanName)
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^\w\u0600-\u06FF-]/g, '');
+
+  if (!cleanName || !cleanSlug) {
+    throw new Error('يرجى إدخال اسم درجة زيت صالح.');
+  }
+
+  return await db.transaction(async (tx) => {
+    await ensureOilGradesSeeded(tx);
+    const existing = await tx.select().from(oilGrades);
+    if (
+      existing.some(
+        (g) =>
+          normalizeArabicForSearch(g.name) === normalizeArabicForSearch(cleanName) ||
+          g.slug.trim().toLowerCase() === cleanSlug.toLowerCase()
+      )
+    ) {
+      throw new Error('توجد درجة زيت بنفس الاسم أو المعرف مسبقاً.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const cleanAliases = Array.from(
+      new Set(
+        [cleanName, ...(Array.isArray(input.aliases) ? input.aliases : [])]
+          .map((a) => String(a || '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    const newRow: typeof oilGrades.$inferInsert = {
+      id: `grade-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      name: cleanName,
+      slug: cleanSlug,
+      sortOrder:
+        typeof input.sortOrder === 'number' && Number.isFinite(input.sortOrder)
+          ? input.sortOrder
+          : existing.length + 1,
+      isActive: input.isActive !== false,
+      aliases: cleanAliases,
+      description: input.description?.trim() || null,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    await tx.insert(oilGrades).values(newRow);
+    await tx.insert(auditLogs).values({
+      id: `aud-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      actionType: 'oil_grade_created',
+      actorId: actor.id,
+      actorName: actor.name,
+      actorRole: actor.role,
+      details: {
+        gradeId: newRow.id,
+        name: newRow.name,
+        aliases: cleanAliases,
+      },
+      createdAt: nowIso,
+    });
+
+    return mapOilGradeRow(newRow as typeof oilGrades.$inferSelect);
+  });
+}
+
+export async function updateOilGradeRecord(
+  input: Partial<OilGradeRecord> & { id: string },
+  actor: User
+): Promise<OilGradeRecord> {
+  return await db.transaction(async (tx) => {
+    const all = await tx.select().from(oilGrades);
+    const current = all.find((g) => g.id === input.id);
+    if (!current) throw new Error('درجة الزيت المطلوبة غير موجودة.');
+
+    const nextName = typeof input.name === 'string' && input.name.trim() ? input.name.trim() : current.name;
+    const nextSlug =
+      typeof input.slug === 'string' && input.slug.trim() ? input.slug.trim() : current.slug;
+
+    if (
+      all.some(
+        (g) =>
+          g.id !== input.id &&
+          (normalizeArabicForSearch(g.name) === normalizeArabicForSearch(nextName) ||
+            g.slug.trim().toLowerCase() === nextSlug.toLowerCase())
+      )
+    ) {
+      throw new Error('توجد درجة زيت أخرى بنفس الاسم أو المعرف.');
+    }
+
+    const nextAliases = Array.isArray(input.aliases)
+      ? Array.from(
+          new Set(
+            [nextName, ...input.aliases].map((a) => String(a || '').trim()).filter(Boolean)
+          )
+        )
+      : current.aliases;
+
+    const nowIso = new Date().toISOString();
+    await tx
+      .update(oilGrades)
+      .set({
+        name: nextName,
+        slug: nextSlug,
+        sortOrder:
+          typeof input.sortOrder === 'number' && Number.isFinite(input.sortOrder)
+            ? input.sortOrder
+            : current.sortOrder,
+        isActive: typeof input.isActive === 'boolean' ? input.isActive : current.isActive,
+        aliases: nextAliases,
+        description:
+          input.description !== undefined ? input.description?.trim() || null : current.description,
+        updatedAt: nowIso,
+      })
+      .where(eq(oilGrades.id, input.id));
+
+    if (nextName !== current.name) {
+      await tx
+        .update(products)
+        .set({ grade: nextName, updatedAt: nowIso })
+        .where(eq(products.gradeId, input.id));
+    }
+
+    await tx.insert(auditLogs).values({
+      id: `aud-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      actionType: 'oil_grade_updated',
+      actorId: actor.id,
+      actorName: actor.name,
+      actorRole: actor.role,
+      details: {
+        gradeId: input.id,
+        previousName: current.name,
+        newName: nextName,
+        isActive: typeof input.isActive === 'boolean' ? input.isActive : current.isActive,
+      },
+      createdAt: nowIso,
+    });
+
+    const [updated] = await tx
+      .select()
+      .from(oilGrades)
+      .where(eq(oilGrades.id, input.id))
+      .limit(1);
+    return mapOilGradeRow(updated);
+  });
 }
 
 export async function getCommissionConfig(): Promise<CommissionConfig> {
@@ -913,7 +1153,7 @@ function mapPriceListImportRow(
 ): PriceListImportRecord {
   return {
     id: r.id,
-    fileName: r.fileName,
+    fileName: decodeUploadedFilename(r.fileName),
     mimeType: r.mimeType,
     fileSizeBytes: r.fileSizeBytes,
     extractionMethod: r.extractionMethod as PriceListImportRecord['extractionMethod'],
@@ -921,6 +1161,7 @@ function mapPriceListImportRow(
     listCategoryId: r.listCategoryId ?? null,
     listCategoryName: r.listCategoryName ?? null,
     columnMapping: (r.columnMapping as PriceListColumnMapping | null) ?? null,
+    importConfig: (r.importConfig as PriceListImportConfig | null) ?? null,
     rawTableRows: (r.rawTableRows as string[][] | undefined) ?? [],
     uploadedById: r.uploadedById,
     uploadedByName: r.uploadedByName,
@@ -949,6 +1190,7 @@ export async function createPriceListImportRecord(params: {
   listCategoryId?: string | null;
   listCategoryName?: string | null;
   columnMapping?: PriceListColumnMapping | null;
+  importConfig?: PriceListImportConfig | null;
   rawTableRows?: string[][];
   parsedItems: PriceListParsedItem[];
   totalParsed: number;
@@ -962,11 +1204,12 @@ export async function createPriceListImportRecord(params: {
 }): Promise<PriceListImportRecord> {
   const nowIso = new Date().toISOString();
   const id = `pli-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const cleanFileName = decodeUploadedFilename(params.fileName);
 
   await db.transaction(async (tx) => {
     await tx.insert(priceListImports).values({
       id,
-      fileName: params.fileName,
+      fileName: cleanFileName,
       mimeType: params.mimeType,
       fileSizeBytes: params.fileSizeBytes,
       fileDataBase64: params.fileDataBase64,
@@ -975,6 +1218,7 @@ export async function createPriceListImportRecord(params: {
       listCategoryId: params.listCategoryId ?? null,
       listCategoryName: params.listCategoryName ?? null,
       columnMapping: params.columnMapping ?? null,
+      importConfig: params.importConfig ?? null,
       rawTableRows: params.rawTableRows ?? [],
       uploadedById: params.actor.id,
       uploadedByName: params.actor.name,
@@ -997,7 +1241,7 @@ export async function createPriceListImportRecord(params: {
       actorRole: params.actor.role,
       details: {
         importId: id,
-        fileName: params.fileName,
+        fileName: cleanFileName,
         listCategoryId: params.listCategoryId ?? null,
         listCategoryName: params.listCategoryName ?? null,
         extractionMethod: params.extractionMethod,
@@ -1012,7 +1256,7 @@ export async function createPriceListImportRecord(params: {
 
   return {
     id,
-    fileName: params.fileName,
+    fileName: cleanFileName,
     mimeType: params.mimeType,
     fileSizeBytes: params.fileSizeBytes,
     extractionMethod: params.extractionMethod,
@@ -1020,6 +1264,7 @@ export async function createPriceListImportRecord(params: {
     listCategoryId: params.listCategoryId ?? null,
     listCategoryName: params.listCategoryName ?? null,
     columnMapping: params.columnMapping ?? null,
+    importConfig: params.importConfig ?? null,
     rawTableRows: params.rawTableRows ?? [],
     uploadedById: params.actor.id,
     uploadedByName: params.actor.name,
@@ -1063,42 +1308,55 @@ export async function remapPriceListImportRecord(params: {
     throw new Error('لا يمكن إعادة تعيين الأعمدة لدفعة معتمدة أو ملغاة.');
   }
 
-  const [allProdRows, categories] = await Promise.all([
+  const [allProdRows, categories, gradesCatalog] = await Promise.all([
     db.select().from(products),
     getAllCategories(),
+    getAllOilGrades(),
   ]);
   const existingProducts = allProdRows.map(mapProductRow);
   const nextListCategoryId =
     params.listCategoryId !== undefined ? params.listCategoryId : importRow.listCategoryId;
 
   const storedRows = (importRow.rawTableRows as string[][] | undefined) || [];
+  const hasExplicitColMapping = Boolean(
+    params.columnMapping &&
+      ((params.columnMapping.columns && Object.keys(params.columnMapping.columns).length > 0) ||
+        (params.columnMapping.columnConfigs &&
+          Object.keys(params.columnMapping.columnConfigs).length > 0))
+  );
+  const storedRowsLookLegacySingleCol =
+    storedRows.length === 0 || storedRows.every((r) => !Array.isArray(r) || r.length <= 1);
+
   let remapped;
-  if (storedRows.length > 0) {
+  if (!storedRowsLookLegacySingleCol || hasExplicitColMapping || !importRow.fileDataBase64) {
     remapped = remapParsedTableRows({
       rawTableRows: storedRows,
       existingProducts,
       categoriesCatalog: categories,
-      listCategoryId: nextListCategoryId,
-      columnMapping: params.columnMapping ?? importRow.columnMapping ?? null,
-    });
-  } else if (importRow.fileDataBase64) {
-    const buffer = Buffer.from(importRow.fileDataBase64, 'base64');
-    remapped = await extractPriceListFromPdfBuffer(buffer, existingProducts, categories, {
+      oilGrades: gradesCatalog,
       listCategoryId: nextListCategoryId,
       columnMapping: params.columnMapping ?? importRow.columnMapping ?? null,
     });
   } else {
-    throw new Error('لا توجد بيانات صفوف خام لإعادة تعيين الأعمدة.');
+    const buffer = Buffer.from(importRow.fileDataBase64, 'base64');
+    remapped = await extractPriceListFromPdfBuffer(buffer, existingProducts, categories, {
+      listCategoryId: nextListCategoryId,
+      columnMapping: params.columnMapping ?? importRow.columnMapping ?? null,
+      oilGrades: gradesCatalog,
+    });
   }
 
+  const cleanFileName = decodeUploadedFilename(importRow.fileName);
   const nowIso = new Date().toISOString();
   await db.transaction(async (tx) => {
     await tx
       .update(priceListImports)
       .set({
+        fileName: cleanFileName,
         listCategoryId: remapped.listCategoryId,
         listCategoryName: remapped.listCategoryName,
         columnMapping: remapped.columnMapping,
+        importConfig: remapped.importConfig ?? null,
         rawTableRows: remapped.rawTableRows,
         parsedItems: remapped.parsedItems,
         totalParsed: remapped.totalParsed,
@@ -1119,6 +1377,8 @@ export async function remapPriceListImportRecord(params: {
         importId: params.importId,
         listCategoryId: remapped.listCategoryId,
         totalParsed: remapped.totalParsed,
+        sourceUnit: remapped.importConfig?.unitConfig?.sourceUnit ?? null,
+        confirmedByUser: remapped.importConfig?.unitConfig?.confirmedByUser ?? false,
       },
       createdAt: nowIso,
     });
@@ -1149,7 +1409,7 @@ export async function getPriceListImportOriginalFile(importId: string): Promise<
 
   if (rows.length === 0 || !rows[0].fileDataBase64) return null;
   return {
-    fileName: rows[0].fileName,
+    fileName: decodeUploadedFilename(rows[0].fileName),
     mimeType: rows[0].mimeType || 'application/pdf',
     buffer: Buffer.from(rows[0].fileDataBase64, 'base64'),
   };
@@ -1157,8 +1417,9 @@ export async function getPriceListImportOriginalFile(importId: string): Promise<
 
 /**
  * Approves a reviewed PDF price list batch:
- * - Strictly enforces non-ambiguous pricing (single ambiguous prices MUST be resolved before saving).
- * - Strictly prevents duplicate product codes & duplicate normalized names within batch or catalog.
+ * - Enforces oil unit confirmation when oils are included.
+ * - Strictly prevents duplicate product codes & duplicate (baseProduct + grade + unit) keys.
+ * - Supports multiple grades per base oil (e.g. عالي KS-1001 & وسط KS-2001) seamlessly.
  * - NEVER modifies existing warehouse `stock` and NEVER inserts `stock_movements`.
  * - New products start with `stock = 0` and `commissionMode = 'inherit_rep'`.
  */
@@ -1182,6 +1443,10 @@ export async function approvePriceListImportRecord(
     }
 
     const categories = (await tx.select().from(productCategories)).map(mapCategoryRow);
+    await ensureOilGradesSeeded(tx);
+    const gradeRows = await tx.select().from(oilGrades);
+    const gradesCatalog = gradeRows.length > 0 ? gradeRows.map(mapOilGradeRow) : DEFAULT_OIL_GRADES;
+
     const commSettingsRows = await tx
       .select()
       .from(systemSettings)
@@ -1198,15 +1463,25 @@ export async function approvePriceListImportRecord(
         .filter((p) => p.code)
         .map((p) => [p.code!.trim().toLowerCase(), p])
     );
-    const byNormNameUnit = new Map(
+
+    const buildVariantKey = (baseName: string, gradeText: string, unitText: string) => {
+      const baseKey = normalizeArabicForSearch(baseName);
+      const gRes = resolveOilGradeMatch(gradeText, gradesCatalog);
+      const gradeKey = normalizeArabicForSearch(gRes.matched ? gRes.canonicalName : gradeText || '');
+      const unitKey = normalizeArabicForSearch(unitText || '');
+      return `${baseKey}||${gradeKey}||${unitKey}`;
+    };
+
+    const byVariantKey = new Map(
       existingProducts.map((p) => [
-        `${normalizeArabicForSearch(p.name)}||${normalizeArabicForSearch(p.unit)}`,
+        buildVariantKey(p.baseProductName || p.name, p.grade || '', p.unit || ''),
         p,
       ])
     );
 
+    const batchUnitConfirmed = Boolean(importRow.importConfig?.unitConfig?.confirmedByUser);
     const selectedCodesInBatch = new Set<string>();
-    const selectedNameUnitInBatch = new Set<string>();
+    const selectedVariantKeyInBatch = new Set<string>();
     const selectedItems = (submittedItems || []).filter((item) => item.selectedForImport);
 
     for (const item of selectedItems) {
@@ -1220,17 +1495,42 @@ export async function approvePriceListImportRecord(
       if (item.matchStatus === 'duplicate_in_file') {
         throw new Error(`الكود ${code} مميز كمكرر داخل الملف ولا يمكن استيراده.`);
       }
+
+      const catObj =
+        categories.find((c) => c.id === item.suggestedCategoryId) ||
+        categories.find((c) => c.name === item.suggestedCategoryName) ||
+        (importRow.listCategoryId
+          ? categories.find((c) => c.id === importRow.listCategoryId)
+          : undefined);
+      const isOilItem = catObj?.id === 'cat-oils' || catObj?.slug === 'oils';
+      if (
+        isOilItem &&
+        !batchUnitConfirmed &&
+        !item.originalPriceUnit &&
+        (item.warnings || []).some((w) => w.includes('وحدة تسعير الزيت غير مؤكدة'))
+      ) {
+        throw new Error(
+          'يجب تأكيد وحدة تسعير الزيوت (كيلوجرام أم جرام) أولاً قبل اعتماد وحفظ الأسعار.'
+        );
+      }
+
       const codeKey = code.toLowerCase();
       if (selectedCodesInBatch.has(codeKey)) {
         throw new Error(`الكود ${code} مكرر في البنود المحددة للاعتماد.`);
       }
       selectedCodesInBatch.add(codeKey);
 
-      const normNameKey = `${normalizeArabicForSearch(item.name)}||${normalizeArabicForSearch(item.unit || '')}`;
-      if (selectedNameUnitInBatch.has(normNameKey)) {
-        throw new Error(`الصنف "${item.name}" مكرر بنفس الاسم والوحدة في البنود المحددة للاعتماد.`);
+      const variantKey = buildVariantKey(
+        item.baseProductName || item.name,
+        item.grade || '',
+        item.unit || ''
+      );
+      if (selectedVariantKeyInBatch.has(variantKey)) {
+        throw new Error(
+          `الصنف "${item.baseProductName || item.name}"${item.grade ? ` (${item.grade})` : ''} مكرر بنفس الدرجة والوحدة في البنود المحددة للاعتماد.`
+        );
       }
-      selectedNameUnitInBatch.add(normNameKey);
+      selectedVariantKeyInBatch.add(variantKey);
 
       if (
         item.ambiguousSinglePrice !== null &&
@@ -1252,13 +1552,23 @@ export async function approvePriceListImportRecord(
       const item = selectedItems[idx];
       const code = item.code.trim().toUpperCase();
       const codeKey = code.toLowerCase();
-      const normNameKey = `${normalizeArabicForSearch(item.name)}||${normalizeArabicForSearch(item.unit || '')}`;
+      const baseName = (item.baseProductName || item.name || '').trim();
+      const baseKey = item.baseProductKey || normalizeArabicForSearch(baseName);
+      const gradeRes = resolveOilGradeMatch(item.grade || '', gradesCatalog);
+      const finalGradeName = item.grade?.trim()
+        ? gradeRes.matched
+          ? gradeRes.canonicalName
+          : item.grade.trim()
+        : '';
+      const finalGradeId = item.gradeId ?? (gradeRes.matched ? gradeRes.gradeId : null);
+
+      const variantKey = buildVariantKey(baseName, finalGradeName, item.unit || '');
       const matched =
         (item.matchedProductId
           ? existingProducts.find((p) => p.id === item.matchedProductId)
           : undefined) ||
         byCode.get(codeKey) ||
-        byNormNameUnit.get(normNameKey);
+        byVariantKey.get(variantKey);
 
       const effectiveSelling =
         item.sellingPrice !== null
@@ -1284,24 +1594,75 @@ export async function approvePriceListImportRecord(
       if (matched) {
         const flags = item.updateFields || {};
         const patch: Partial<typeof products.$inferInsert> = {};
-        if (flags.name && item.name.trim()) patch.name = item.name.trim();
+        if (flags.name && item.name.trim()) {
+          patch.name = item.name.trim();
+          patch.baseProductName = baseName;
+          patch.baseProductKey = baseKey;
+        }
         if (flags.description) patch.description = item.description.trim() || null;
         if (flags.category) {
           patch.categoryId = catObj.id;
           patch.categoryName = catObj.name;
         }
         if (flags.unit && item.unit?.trim()) patch.unit = item.unit.trim();
-        if (flags.sellingPrice && effectiveSelling !== null && Number.isFinite(effectiveSelling) && effectiveSelling > 0) {
+        if (flags.grade && finalGradeName) {
+          patch.grade = finalGradeName;
+          patch.gradeId = finalGradeId;
+        }
+        if (
+          flags.sellingPrice &&
+          effectiveSelling !== null &&
+          Number.isFinite(effectiveSelling) &&
+          effectiveSelling > 0
+        ) {
           patch.pricePerMg = effectiveSelling;
         }
-        if (flags.costPrice && effectiveCost !== null && Number.isFinite(effectiveCost) && effectiveCost >= 0) {
+        if (
+          flags.costPrice &&
+          effectiveCost !== null &&
+          Number.isFinite(effectiveCost) &&
+          effectiveCost >= 0
+        ) {
           patch.costPrice = effectiveCost;
+          patch.costUpdatedAt = nowIso;
+        }
+        if (!matched.baseProductName && baseName) {
+          patch.baseProductName = baseName;
+          patch.baseProductKey = baseKey;
+        }
+        if (!matched.gradeId && finalGradeId) {
+          patch.gradeId = finalGradeId;
         }
         // Explicitly NEVER touch stock!
         if (Object.keys(patch).length > 0) {
           patch.updatedAt = nowIso;
           await tx.update(products).set(patch).where(eq(products.id, matched.id));
           updatedCount += 1;
+
+          const priceChanged =
+            (patch.pricePerMg !== undefined && patch.pricePerMg !== matched.pricePerMg) ||
+            (patch.costPrice !== undefined && patch.costPrice !== matched.costPrice);
+          if (priceChanged) {
+            await tx.insert(productPriceHistory).values({
+              id: `pph-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000)}`,
+              productId: matched.id,
+              productCode: matched.code || code,
+              productName: patch.name || matched.name,
+              grade: patch.grade || matched.grade || finalGradeName || '',
+              previousSellingPrice: matched.pricePerMg,
+              newSellingPrice: patch.pricePerMg ?? matched.pricePerMg,
+              previousCostPrice: matched.costPrice ?? null,
+              newCostPrice: patch.costPrice !== undefined ? patch.costPrice : matched.costPrice ?? null,
+              unit: patch.unit || matched.unit || 'جرام',
+              sourceType: 'pdf_import',
+              importBatchId: importId,
+              actorId: actor.id,
+              actorName: actor.name,
+              actorRole: actor.role,
+              note: item.conversionNote || `تحديث من استيراد قائمة الأسعار (${decodeUploadedFilename(importRow.fileName)})`,
+              createdAt: nowIso,
+            });
+          }
         }
       } else {
         if (effectiveSelling === null || !Number.isFinite(effectiveSelling) || effectiveSelling <= 0) {
@@ -1315,6 +1676,17 @@ export async function approvePriceListImportRecord(
         );
         const newId = `p-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000)}`;
         const finalUnit = item.unit?.trim() || catObj.defaultUnit;
+        const resolvedGrade =
+          finalGradeName ||
+          (catObj.id === 'cat-oils'
+            ? (gradesCatalog.find((g) => g.isActive)?.name || 'عالي')
+            : '');
+        const resolvedGradeId =
+          finalGradeId ??
+          (!finalGradeName && catObj.id === 'cat-oils'
+            ? (gradesCatalog.find((g) => g.isActive)?.id || null)
+            : null);
+
         const newProdRow: typeof products.$inferInsert = {
           id: newId,
           code,
@@ -1323,9 +1695,13 @@ export async function approvePriceListImportRecord(
           categoryName: catObj.name,
           description: item.description.trim() || null,
           unit: finalUnit,
-          grade: catObj.id === 'cat-oils' ? 'عالي (Code A)' : '',
+          grade: resolvedGrade,
+          gradeId: resolvedGradeId,
+          baseProductName: baseName,
+          baseProductKey: baseKey,
           pricePerMg: effectiveSelling,
           costPrice: effectiveCost,
+          costUpdatedAt: effectiveCost !== null ? nowIso : null,
           stock: 0, // NEVER add warehouse stock from a price list import!
           isActive: true,
           isCommissionEligible: defaultEligible,
@@ -1334,12 +1710,30 @@ export async function approvePriceListImportRecord(
           updatedAt: nowIso,
         };
         await tx.insert(products).values(newProdRow);
+
+        await tx.insert(productPriceHistory).values({
+          id: `pph-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000)}`,
+          productId: newId,
+          productCode: code,
+          productName: newProdRow.name,
+          grade: resolvedGrade,
+          previousSellingPrice: null,
+          newSellingPrice: effectiveSelling,
+          previousCostPrice: null,
+          newCostPrice: effectiveCost,
+          unit: finalUnit,
+          sourceType: 'pdf_import',
+          importBatchId: importId,
+          actorId: actor.id,
+          actorName: actor.name,
+          actorRole: actor.role,
+          note: item.conversionNote || `إضافة من استيراد قائمة الأسعار (${decodeUploadedFilename(importRow.fileName)})`,
+          createdAt: nowIso,
+        });
+
         const insertedProd = newProdRow as typeof products.$inferSelect;
         byCode.set(codeKey, insertedProd);
-        byNormNameUnit.set(
-          `${normalizeArabicForSearch(newProdRow.name)}||${normalizeArabicForSearch(finalUnit)}`,
-          insertedProd
-        );
+        byVariantKey.set(buildVariantKey(baseName, resolvedGrade, finalUnit), insertedProd);
         createdCount += 1;
       }
     }
@@ -1372,7 +1766,7 @@ export async function approvePriceListImportRecord(
       actorRole: actor.role,
       details: {
         importId,
-        fileName: importRow.fileName,
+        fileName: decodeUploadedFilename(importRow.fileName),
         listCategoryId: importRow.listCategoryId,
         ...approvalSummary,
       },
@@ -1411,6 +1805,72 @@ export async function cancelPriceListImportRecord(importId: string, actor: User)
       details: { importId },
       createdAt: nowIso,
     });
+  });
+}
+
+/**
+ * Deletes ONLY archived/stored price list import batch records (and their inline file_data_base64 PDF blob).
+ * NEVER touches catalog products, codes, prices, stock, stock_movements, historical orders, or commissions.
+ */
+export async function deletePriceListImportRecords(
+  importIds: string[],
+  actor: User
+): Promise<{ deletedCount: number; deletedIds: string[]; deletedFiles: string[] }> {
+  const cleanIds = Array.from(
+    new Set((importIds || []).map((id) => String(id || '').trim()).filter(Boolean))
+  );
+  if (cleanIds.length === 0) {
+    throw new Error('يرجى تحديد دفعة استيراد واحدة على الأقل للحذف.');
+  }
+
+  return await db.transaction(async (tx) => {
+    const existing = await tx
+      .select({
+        id: priceListImports.id,
+        fileName: priceListImports.fileName,
+        status: priceListImports.status,
+        uploadedAt: priceListImports.uploadedAt,
+        listCategoryName: priceListImports.listCategoryName,
+      })
+      .from(priceListImports)
+      .where(inArray(priceListImports.id, cleanIds));
+
+    if (existing.length === 0) {
+      throw new Error('دفعة الاستيراد المطلوب حذفها غير موجودة في السجل.');
+    }
+
+    const foundIds = existing.map((e) => e.id);
+    const deletedFiles = existing.map((e) => decodeUploadedFilename(e.fileName));
+
+    await tx.delete(priceListImports).where(inArray(priceListImports.id, foundIds));
+
+    const nowIso = new Date().toISOString();
+    await tx.insert(auditLogs).values({
+      id: `aud-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      actionType: 'price_list_archive_deleted',
+      actorId: actor.id,
+      actorName: actor.name,
+      actorRole: actor.role,
+      details: {
+        deletedCount: foundIds.length,
+        deletedIds: foundIds,
+        deletedBatches: existing.map((e) => ({
+          id: e.id,
+          fileName: decodeUploadedFilename(e.fileName),
+          status: e.status,
+          uploadedAt: e.uploadedAt,
+          listCategoryName: e.listCategoryName,
+        })),
+        catalogProductsModified: false,
+      },
+      createdAt: nowIso,
+    });
+
+    return {
+      deletedCount: foundIds.length,
+      deletedIds: foundIds,
+      deletedFiles,
+    };
   });
 }
 
@@ -1469,6 +1929,7 @@ export async function computeOwnerCommissionAnalytics(): Promise<OwnerCommission
 export async function getOwnerOverviewData() {
   const [
     categories,
+    oilGradesList,
     commissionConfig,
     generalSettings,
     commissionLogRows,
@@ -1479,6 +1940,7 @@ export async function getOwnerOverviewData() {
     backups,
   ] = await Promise.all([
     getAllCategories(),
+    getAllOilGrades(),
     getCommissionConfig(),
     getGeneralSystemSettings(),
     db
@@ -1495,6 +1957,7 @@ export async function getOwnerOverviewData() {
 
   return {
     categories,
+    oilGrades: oilGradesList,
     commissionConfig,
     generalSettings,
     commissionLogs: commissionLogRows.map(

@@ -1,0 +1,970 @@
+# Kima Scent — Advanced Business Management, Analytics & Operations Upgrade
+
+Upgrade the existing Kima Scent Wholesale Management System into a professional, scalable wholesale business management and analytics platform.
+
+This is an enhancement of the existing production application, NOT a rebuild.
+
+## 0. Critical Instructions
+
+Before writing or modifying any code:
+
+1. Inspect the current project architecture, database schema, API endpoints, role permissions, invoice workflow, inventory logic, commissions, reports, and existing Owner Control Center.
+2. Identify the actual cause of any conflicting or incomplete functionality before fixing it.
+3. Reuse existing components, tables, business logic, design system, and infrastructure wherever possible.
+4. Do not rebuild the project, replace its architecture, or migrate its database.
+5. Do not remove, rename, or break existing working features.
+6. Preserve all real users, credentials, permissions, historical invoices, customers, products, stock movements, commission snapshots, and audit records.
+7. Do not run destructive operations on the production database during development or testing.
+8. Do not expose sensitive business data across salesperson accounts.
+9. Do not claim a feature is completed unless it has been implemented and tested.
+
+Implement the following upgrade as a cohesive feature set with appropriate database migrations, backend logic, frontend UI, permissions, reports, and automated tests.
+
+---
+
+# PHASE 1 — OWNER BUSINESS INTELLIGENCE DASHBOARD
+
+Create a professional, comprehensive Owner-only Business Intelligence Dashboard that gives the business owner a complete view of Kima Scent operations.
+
+This should be a real operational dashboard driven by actual database data, not static mockups.
+
+## 1.1 Dashboard Overview
+
+Create an organized dashboard showing:
+
+- Total sales revenue for selected period.
+- Total number of invoices.
+- Average invoice value.
+- Number of customers who purchased.
+- New customers during selected period.
+- Repeat customers.
+- Total quantity sold.
+- Total stock value, where reliable cost data exists.
+- Total sales commission.
+- Estimated gross profit, only when reliable cost data is available.
+- Pending orders.
+- Orders being prepared.
+- Orders awaiting sourcing.
+- Orders ready for delivery.
+- Delivered orders.
+- Cancelled orders.
+- Returned orders, where applicable.
+- Sales growth or decline compared to previous equivalent period.
+
+Never display fabricated values. If data is unavailable, show a clear unavailable state instead of zero or invented calculations.
+
+## 1.2 Date and Report Filters
+
+All major dashboard metrics should support:
+
+- Today.
+- Yesterday.
+- This week.
+- This month.
+- Previous month.
+- Last 30 days.
+- Last 90 days.
+- This year.
+- Custom date range.
+
+Additional filters when applicable:
+
+- Salesperson.
+- Product category.
+- Product.
+- Invoice status.
+- Customer.
+- Stock source.
+
+Changing a filter must update all relevant dashboard cards, charts, tables, and reports consistently.
+
+## 1.3 Sales Analytics
+
+Provide detailed sales analytics including:
+
+- Sales revenue over time.
+- Daily, weekly, and monthly comparisons.
+- Number of invoices over time.
+- Average invoice value.
+- Sales by salesperson.
+- Sales by category.
+- Sales by individual product.
+- Sales by customer.
+- Sales by stock source (warehouse vs external sourcing).
+- Top-performing and lowest-performing products.
+- Sales distribution by category.
+- Growth percentage versus the previous comparable period.
+
+Charts should be readable, interactive where useful, and support switching chart styles when appropriate.
+
+Clicking a chart segment, metric, or ranking should open the relevant filtered detail view whenever practical.
+
+## 1.4 Product Category Sales Breakdown
+
+Provide a category breakdown that accurately reflects Kima Scent product types, including:
+
+- Perfume oils.
+- Empty bottles and packaging (foragh).
+- Alcohol.
+- Chemicals.
+- Other supplies.
+
+Display the actual quantities sold using the appropriate unit for each category.
+
+Examples:
+
+- Oils: kilograms and grams.
+- Alcohol: liters or the actual configured unit.
+- Empty bottles: pieces.
+- Chemicals: their configured unit.
+- Other supplies: configured units.
+
+Do not combine incompatible units into a single total quantity.
+
+The owner should be able to see:
+
+- Revenue by category.
+- Quantity sold by category.
+- Number of invoices containing each category.
+- Category contribution to total revenue.
+- Category sales trends.
+- Category profit when cost information is available.
+- Warehouse-sourced quantity.
+- Externally sourced quantity.
+
+Include a clear category summary, for example:
+
+| Category | Quantity sold | Revenue | Warehouse | External |
+| Oils | kg | EGP | kg | kg |
+| Empty bottles | pieces | EGP | pieces | pieces |
+| Alcohol | liters/units | EGP | liters/units | liters/units |
+| Chemicals | configured units | EGP | units | units |
+
+The table must use real data and actual product units.
+
+## 1.5 Best-Selling Products
+
+Create a ranking of the most requested products based on:
+
+- Quantity sold.
+- Number of invoices containing the product.
+- Revenue.
+- Repeat demand.
+- Growth during the selected period.
+
+Provide:
+
+- Top 10.
+- Top 20.
+- Top 50.
+- Custom list when practical.
+
+Include product category and unit.
+
+Identify products that are frequently requested but often unavailable in the warehouse.
+
+Provide a useful indicator for potential stocking opportunities based on sales demand and external sourcing history.
+
+## 1.6 Business Alerts and Owner Insights
+
+Create a section for actionable business alerts, such as:
+
+- Products with low stock.
+- Products with zero stock but recurring demand.
+- Products that may need replenishment.
+- Unusually high sales of a product.
+- Significant sales decline.
+- Salesperson with a sudden decline or increase.
+- Customers who have not purchased recently compared to their previous behavior.
+- Pending orders that have been delayed.
+- Orders waiting for external sourcing.
+- Orders ready but not delivered.
+- Unusual stock discrepancies.
+- Missing product cost information preventing profit calculations.
+- Customers with unusually high purchasing activity.
+
+Alerts must be based on transparent rules and actual data.
+
+Avoid AI-generated conclusions that are not supported by data. If AI insights are used, clearly distinguish AI suggestions from verified metrics.
+
+---
+
+# PHASE 2 — SALESPERSON PERFORMANCE & COMMISSION ANALYTICS
+
+Create an owner-level Sales Performance Center.
+
+## 2.1 Salesperson Overview
+
+For every salesperson, display:
+
+- Salesperson name.
+- Total sales within the selected period.
+- Number of invoices.
+- Average invoice value.
+- Total quantity sold.
+- Number of customers served.
+- New customers acquired.
+- Repeat customers.
+- Total commission earned.
+- Commission pending.
+- Commission paid, if payment tracking exists.
+- Cancelled sales.
+- Delivered orders.
+- Performance comparison with previous period.
+
+## 2.2 Sales by Product Category for Each Salesperson
+
+The owner must be able to open any salesperson and see exactly what they sold, including:
+
+- Oils sold in kg/g.
+- Empty bottles sold in pieces.
+- Alcohol sold in the configured units.
+- Chemicals sold.
+- Other supplies sold.
+- Revenue per category.
+- Number of invoices per category.
+- Warehouse quantity.
+- External sourcing quantity.
+- Top products sold by that salesperson.
+
+Example salesperson report:
+
+| Category | Quantity sold | Revenue | External sourced |
+| Oils | 35 kg | EGP | 8 kg |
+| Empty bottles | 1,200 pcs | EGP | 200 pcs |
+| Alcohol | 80 L | EGP | 15 L |
+
+These are examples only. Use real records and correct units.
+
+## 2.3 Commission Reporting
+
+Integrate with the existing category-based commission system.
+
+Show:
+
+- Total commission by salesperson.
+- Commission by category.
+- Commission by invoice.
+- Commission by product when applicable.
+- Commission earned.
+- Commission pending.
+- Commission paid, if the existing system supports payment records.
+- Commission adjustments.
+- Commission trends over time.
+
+Preserve the existing commission calculation hierarchy, overrides, zero-rate rules, snapshots, and historical commission values.
+
+Do NOT recalculate historical commission snapshots or change old invoice commissions when current commission rules change.
+
+Cancelled, returned, undelivered, or otherwise ineligible invoices must follow the existing commission rules.
+
+Clearly define which invoice states are included in each report.
+
+## 2.4 Salesperson Comparison
+
+Create a comparison view for authorized owners showing:
+
+- Revenue ranking.
+- Quantity ranking.
+- Invoice count.
+- Average order value.
+- New customers.
+- Repeat customer rate.
+- Commission.
+- Category performance.
+- Growth versus previous period.
+
+Use consistent date filters and allow exporting reports.
+
+---
+
+# PHASE 3 — CUSTOMER ANALYTICS & EXCEL EXPORT
+
+Create a dedicated Customer Analytics section.
+
+## 3.1 Customer Reports by Date
+
+Allow the owner to filter customers based on the selected reporting period.
+
+Include:
+
+- Customers who purchased during the selected period.
+- Number of orders per customer.
+- Total purchased value.
+- Average order value.
+- First purchase date.
+- Last purchase date.
+- Salesperson responsible.
+- Customer phone number.
+- Customer address, where available.
+- Customer category, if applicable.
+
+Customer purchase frequency must be based on eligible completed business transactions, following the actual existing invoice lifecycle rules.
+
+Do not count cancelled invoices, test invoices, or duplicate records as genuine purchases.
+
+## 3.2 Repeat Customer Filters
+
+Add clear filters:
+
+- All customers who purchased during the period.
+- One-time buyers.
+- Purchased 2+ times.
+- Purchased 3+ times.
+- Purchased 5+ times.
+- Custom minimum number of purchases.
+- Customers with increased purchase frequency.
+- Customers whose purchases have declined.
+- Customers who have not returned within a configurable period.
+
+Allow sorting by:
+
+- Purchase frequency.
+- Total spending.
+- Last purchase date.
+- Revenue.
+- Average invoice.
+- Customer name.
+
+## 3.3 Excel Export
+
+Add a professional Excel export for customer analytics.
+
+The Excel file should contain:
+
+- Customer name.
+- Phone.
+- Address.
+- Assigned salesperson.
+- Purchase count.
+- Total purchase value.
+- Average invoice value.
+- First purchase date.
+- Last purchase date.
+- Customer classification, if applicable.
+- Repeat customer indicator.
+
+Include the selected reporting period and filter criteria in the exported report.
+
+Use a readable Excel layout, appropriate column widths, headers, numeric formatting, date formatting, and summary information.
+
+## 3.4 Salesperson Customer Privacy
+
+Salesperson accounts must have access to the customer analytics functionality, but each salesperson can only view and export customers assigned to them according to the existing assignment model and access rules.
+
+Salespeople must be able to:
+
+- Export their own customers.
+- Filter by date.
+- Identify one-time buyers.
+- Identify repeat buyers.
+- See purchase counts and purchase totals for their assigned customers.
+- Identify customers who have not purchased recently.
+- Sort and search their customer list.
+
+They must NEVER be able to retrieve, export, or access other salespeople's customer data through frontend, API, query manipulation, or direct endpoints.
+
+Enforce access restrictions on the backend, not just by hiding frontend controls.
+
+---
+
+# PHASE 4 — BULK SELECTION AND BULK OPERATIONS
+
+Implement a consistent multi-selection experience across the system wherever bulk operations are useful and safe.
+
+Include the following sections:
+
+- Product catalog.
+- Inventory.
+- Customers.
+- Invoices and orders.
+- Sales records, where applicable.
+
+## 4.1 Selection Features
+
+Implement:
+
+- Checkbox on each row.
+- Select current page.
+- Select all results matching current filters when practical.
+- Clear selection.
+- Selected item count.
+- Persistent selection when changing pages, where safe.
+- Clear selection when filter changes would create ambiguity.
+- Bulk action bar.
+- Preview before executing impactful operations.
+
+Do not confuse "select current page" with "select all matching search results."
+
+## 4.2 Product Catalog Bulk Actions
+
+Where permissions allow:
+
+- Archive selected products.
+- Restore selected archived products.
+- Delete eligible unused products.
+- Change category.
+- Update prices where supported.
+- Export selected products.
+- Filter and select products by category.
+
+Bulk deletion must individually validate every product.
+
+Products with historical invoices or stock movements must not be hard-deleted. Provide a clear explanation and offer archive instead.
+
+## 4.3 Inventory Bulk Actions
+
+Allow selecting multiple products and:
+
+- Set final stock quantity for each selected product.
+- Add a quantity to each selected product.
+- Set a category-specific quantity.
+- Perform stock adjustments with a reason.
+- Export selected products and stock.
+- Filter by category, stock level, and product name.
+
+Support correct units:
+
+- Oils: kg and grams.
+- Empty bottles: pieces.
+- Alcohol: configured units.
+- Chemicals: configured units.
+- Other products: configured units.
+
+For example, the owner may select 30 oils and set the stock to 1 kg each, or add 1 kg to their current stock.
+
+Distinguish clearly between:
+
+- Set stock = replace current quantity with the specified final quantity.
+- Add stock = increment the existing quantity by the specified amount.
+
+Never confuse these operations.
+
+Show a preview with:
+
+- Product.
+- Current stock.
+- Operation.
+- Quantity.
+- Final stock.
+- Unit.
+- Any excluded products and reasons.
+
+Create accurate stock movement records for every adjustment.
+
+Prevent duplicate movements if the request is retried or interrupted.
+
+## 4.4 Customer Bulk Actions
+
+Allow authorized users to:
+
+- Export selected customers.
+- Export customers matching filters.
+- View repeat customer analysis.
+- Assign or reassign customers if the existing permissions and assignment workflow allow it.
+
+Do not bulk-delete customers if linked invoices exist.
+
+## 4.5 Invoice Bulk Actions
+
+Implement only bulk operations that are compatible with the existing invoice workflow.
+
+Possible actions:
+
+- Export selected invoices.
+- Export invoices matching filters.
+- Print or generate invoice documents where supported.
+- Perform allowed status transitions only when all selected invoices are eligible.
+
+Never allow bulk operations to bypass invoice confirmation, revisions, stock allocation, preparation, delivery, cancellation, commission, or audit protections.
+
+Show excluded invoices and reasons in the preview.
+
+---
+
+# PHASE 5 — FLEXIBLE INVENTORY AND EXTERNAL SOURCING
+
+This is a critical business feature.
+
+The inventory must represent actual physical stock, while sales must be allowed to proceed even when warehouse stock is insufficient.
+
+Do not treat external supplier availability as warehouse stock.
+
+## 5.1 Sales Must Not Be Blocked by Zero Stock
+
+A salesperson must be able to create and submit an order for a product even when warehouse stock is zero, provided the product is valid and the existing order permissions are satisfied.
+
+A zero-stock product must not prevent a sale.
+
+Do not allow negative warehouse stock.
+
+## 5.2 Source Allocation
+
+Each order line must accurately distinguish:
+
+- Quantity fulfilled from warehouse stock.
+- Quantity supplied externally.
+- Quantity still pending sourcing.
+- Total ordered quantity.
+
+Maintain this invariant:
+
+warehouseDeductedQty + externalSuppliedQty + pendingQty = orderedQty
+
+Use correct product units and precision.
+
+Where appropriate, default to using available warehouse stock first, then allocate the remaining quantity to external sourcing.
+
+Allow authorized users to modify source allocation when the workflow supports it.
+
+Example:
+
+Customer orders 10 kg of oil.
+
+Warehouse stock = 3 kg.
+
+The order can be allocated as:
+
+- 3 kg from warehouse.
+- 7 kg external supply.
+- 10 kg total.
+
+If warehouse stock is zero:
+
+- 0 kg from warehouse.
+- 10 kg external supply or pending sourcing.
+- 10 kg total order.
+
+## 5.3 External Sourcing Workflow
+
+Distinguish between:
+
+- External supply already secured/received and allocated to the order.
+- External supply not yet secured and still pending.
+
+Pending external sourcing must not be incorrectly marked as ready for preparation or delivery.
+
+When external supply is secured, record the appropriate sourcing event and allocation.
+
+Prevent duplicate sourcing receipts or duplicate stock movements.
+
+Do not automatically add externally supplied quantities to warehouse stock unless the business workflow explicitly records the goods as received into the warehouse.
+
+Preserve the current stock allocation and preparation rules where they remain correct.
+
+## 5.4 External Sourcing Costs and Profit
+
+If the existing system can safely support it, record the actual external acquisition cost for externally supplied quantities.
+
+Support:
+
+- Supplier reference, when available.
+- External quantity.
+- Unit cost.
+- Total sourcing cost.
+- Date secured.
+- Order reference.
+- Optional notes.
+
+Do not invent purchase cost when it is unknown.
+
+If cost information is missing, show profit as unavailable or incomplete, not as zero cost.
+
+Clearly distinguish:
+
+- Sales revenue.
+- Product cost.
+- External sourcing cost.
+- Gross profit estimate.
+- Commission.
+- Other expenses, if tracked.
+- Net profit only when sufficient expense data exists.
+
+Avoid falsely presenting revenue as profit.
+
+## 5.5 Source Allocation in the Invoice and Order Workflow
+
+Provide a practical interface showing:
+
+- Ordered quantity.
+- Warehouse available quantity.
+- Warehouse allocated quantity.
+- External quantity secured.
+- External quantity pending.
+- Remaining quantity to source.
+- Unit.
+
+Allow authorized users to manage allocation.
+
+Keep the interface simple enough for sales and warehouse staff to understand.
+
+The salesperson should be able to sell without needing to manually manipulate warehouse inventory.
+
+Warehouse or authorized operations staff must be able to complete sourcing and preparation workflow according to permissions.
+
+## 5.6 Inventory Reporting
+
+Create inventory analytics with:
+
+- Current warehouse stock.
+- Stock value, only if reliable cost information exists.
+- Products with zero stock.
+- Low-stock products.
+- Products with high stock.
+- Products with no movement.
+- Products with frequent external sourcing.
+- Products with high sales demand.
+- Stock adjustments.
+- Stock movement history.
+- Stock usage during selected period.
+- Warehouse quantity sold.
+- External quantity sold/sourced.
+- Products requiring restocking.
+
+Include a suggested restocking list based on historical demand and sourcing patterns.
+
+If implementing reorder recommendations, provide a transparent calculation, such as average demand, selected time window, lead time, and safety-stock assumptions. Allow the owner to adjust those assumptions.
+
+Do not automatically purchase products or change stock quantities based on recommendations.
+
+---
+
+# PHASE 6 — CATALOG AND SYSTEM RESET MANAGEMENT
+
+Enhance the existing Owner Control Center and reset tools without compromising historical data.
+
+## 6.1 Catalog Management
+
+Provide bulk and individual product management:
+
+- Create.
+- Edit.
+- Archive.
+- Restore.
+- Permanently delete eligible unused products.
+- Bulk category update.
+- Bulk price update, if compatible with existing price management.
+- Bulk stock adjustments through inventory tools.
+
+Archived products must:
+
+- Be excluded from new invoice product selection.
+- Remain accessible in historical invoices.
+- Remain available in reports where historical references require them.
+- Be restorable.
+
+Hard deletion is only allowed if the product has no protected historical dependencies, invoices, stock movements, or other records that require its identity.
+
+## 6.2 Complete Catalog Removal
+
+Add a clear Owner-only option to remove the entire catalog when explicitly requested.
+
+Before executing:
+
+- Show the number of products.
+- Show products eligible for deletion.
+- Show protected products.
+- Explain why protected products cannot be deleted.
+- Offer archive for protected products.
+- Require explicit confirmation.
+- Require step-up authentication when applicable.
+- Create a safety backup.
+- Log the action.
+
+Do not silently delete historical product references.
+
+## 6.3 Comprehensive Reset Options
+
+Expand the existing reset center to clearly distinguish:
+
+- Reset sales/invoices.
+- Reset inventory quantities.
+- Remove demo customers.
+- Remove demo products.
+- Delete eligible customers.
+- Delete eligible catalog products.
+- Reset operational data.
+- Full business reset with individually selectable data categories.
+
+Allow the owner to choose which data groups to reset, where technically and historically safe.
+
+Possible groups include:
+
+- Customers.
+- Products/catalog.
+- Invoices/orders.
+- Order revisions.
+- Commission records.
+- Stock quantities.
+- Stock movement history.
+- Sales history.
+- Sourcing records.
+- Operational logs.
+- Other application data that is safe and explicitly selected.
+
+Do NOT include:
+
+- Owner account.
+- Authentication secrets.
+- User access configuration unless explicitly selected and protected.
+- Core system settings.
+- Database schema.
+- Audit logs required for security/accountability unless the existing policy and explicit reset design allow it.
+
+Before execution, generate an impact preview showing exact tables and record counts affected, records protected, and dependencies.
+
+Full reset must require Owner-only authorization, step-up verification, typed confirmation, safety backup, audit record, and a secure execution lock.
+
+Do not test full reset against production.
+
+If an operation is unsafe or cannot be reliably reversed, block it and explain why.
+
+---
+
+# PHASE 7 — REPORTS, EXPORTS, AND BUSINESS INSIGHTS
+
+Create a unified Reports Center.
+
+Provide:
+
+- Sales report.
+- Salesperson report.
+- Commission report.
+- Category report.
+- Product report.
+- Customer report.
+- Repeat customer report.
+- Inventory report.
+- Stock movement report.
+- External sourcing report.
+- Invoice status report.
+- Operational performance report.
+
+Each report should support:
+
+- Date range.
+- Relevant category filters.
+- Product filters.
+- Salesperson filters.
+- Customer filters.
+- Invoice status filters.
+- Warehouse/external source filters.
+- Excel export where appropriate.
+- Print-friendly format where appropriate.
+
+Exports must use the same filtering and calculations as the on-screen reports.
+
+Ensure exports are restricted by the requesting user's permissions and ownership scope.
+
+---
+
+# PHASE 8 — USER EXPERIENCE AND DESIGN QUALITY
+
+Maintain the current Kima Scent design language and Arabic RTL interface.
+
+Upgrade the UI to a polished, professional business dashboard:
+
+- Clear visual hierarchy.
+- Useful KPI cards.
+- Consistent charts.
+- Readable tables.
+- Responsive desktop and tablet layouts.
+- Practical filters.
+- Fast search.
+- Empty states.
+- Loading states.
+- Error states.
+- Confirmation dialogs.
+- Clear success/failure feedback.
+- Accessible controls.
+- Avoid excessive visual clutter.
+- Avoid decorative charts with no business value.
+- Avoid duplicating metrics in too many places.
+
+The Owner dashboard should prioritize important business information and allow drilling down into detailed reports.
+
+Salesperson views must remain simpler and limited to their authorized scope.
+
+Do not unnecessarily redesign unrelated screens.
+
+---
+
+# PHASE 9 — DATABASE, PERFORMANCE, AND SECURITY
+
+Before adding schema changes, inspect the existing schema and reuse existing entities where possible.
+
+If migrations are required:
+
+- Use safe forward migrations.
+- Preserve existing data.
+- Do not recreate production databases.
+- Do not drop existing tables or columns without a clear migration plan and explicit approval.
+- Maintain foreign keys and referential integrity.
+- Add appropriate indexes for date filters, customer lookups, salesperson reports, product/category filters, and other frequent queries.
+- Avoid loading large datasets into the frontend unnecessarily.
+- Use server-side filtering, pagination, and aggregation for large reports.
+- Avoid N+1 queries.
+- Avoid unnecessary repeated full database scans.
+- Prevent duplicate processing on retries.
+- Use transactions for multi-record business operations.
+- Keep sensitive fields and credentials out of logs and exports.
+
+Ensure backend permission checks for:
+
+- Owner dashboard.
+- Business-wide sales analytics.
+- Commission analytics.
+- Customer exports.
+- Salesperson reports.
+- Bulk operations.
+- Inventory sourcing.
+- Catalog removal.
+- Full reset.
+
+Salespersons must only access their authorized data.
+
+Managers and operations users must retain their existing permissions unless an explicitly required change is made.
+
+Do not broaden permissions simply to make a feature work.
+
+---
+
+# PHASE 10 — TESTING AND ACCEPTANCE
+
+Test the new functionality thoroughly in an isolated test database/schema.
+
+Do not modify or delete production business records to test destructive features.
+
+## Required Testing
+
+### Dashboard
+- Verify metrics against database calculations.
+- Verify date filters.
+- Verify category totals and units.
+- Verify salesperson totals.
+- Verify cancelled and excluded invoice rules.
+- Verify comparisons with previous periods.
+
+### Salesperson Analytics
+- Verify salesperson-specific sales.
+- Verify commissions against existing commission logic.
+- Verify category breakdown.
+- Verify repeat customer counts.
+- Verify salesperson privacy.
+- Attempt API access to another salesperson's customers and verify denial.
+
+### Customer Export
+- Verify date filtering.
+- Verify repeat buyer filters.
+- Verify Excel columns and formatting.
+- Verify totals.
+- Verify salesperson exports contain only authorized customers.
+
+### Bulk Selection
+- Verify page selection versus all filtered results.
+- Verify filters and selection counts.
+- Verify preview.
+- Verify excluded records.
+- Verify operations on mixed eligible/ineligible products.
+- Verify no duplicate stock movements.
+
+### Flexible Inventory
+- Sell when warehouse stock is zero.
+- Sell when stock partially covers the order.
+- Verify warehouse-first allocation where configured.
+- Verify external secured supply versus pending supply.
+- Verify no negative stock.
+- Verify no duplicate sourcing or stock movements.
+- Verify order quantities and invoice totals remain correct.
+- Verify preparation and delivery restrictions remain correct.
+- Verify sourcing cost and profit calculations when costs are known.
+- Verify profit is not falsely calculated when costs are missing.
+
+### Catalog and Reset
+- Verify archive/restore.
+- Verify eligible product deletion.
+- Verify historical products are protected.
+- Verify catalog-removal preview.
+- Verify reset previews.
+- Verify Owner-only authorization.
+- Verify step-up authentication.
+- Verify audit logs.
+- Verify backup handling.
+- Verify protected data remains unchanged.
+- Do not execute destructive tests on production.
+
+### Regression
+Run existing project tests and verify:
+
+- Build.
+- TypeScript checks.
+- Existing API tests.
+- Authentication.
+- Permissions.
+- Invoices.
+- Order revisions.
+- Commissions.
+- Stock movements.
+- Customers.
+- PDF imports.
+- Backup and reset tools.
+
+Fix only regressions directly caused by this implementation. Do not make unrelated changes.
+
+---
+
+# PHASE 11 — IMPLEMENTATION PRIORITY
+
+Implement the complete requested feature set in an organized way while preserving working functionality.
+
+Recommended implementation sequence:
+
+1. Inspect architecture and create an implementation plan.
+2. Database schema and safe migrations.
+3. Bulk selection infrastructure.
+4. Flexible stock sourcing and allocation logic.
+5. Customer analytics and Excel exports.
+6. Salesperson and commission analytics.
+7. Owner Business Intelligence dashboard.
+8. Inventory and sourcing reports.
+9. Catalog management and reset enhancements.
+10. Performance, security, UI polish, and comprehensive testing.
+
+Do not stop after creating UI mockups or static charts.
+
+Features must be connected to actual backend data and tested.
+
+If the implementation exceeds the available context or execution budget, do not claim full completion. Finish the highest-priority safe phase, report what is completed, what remains, and continue from the existing implementation without restarting the project.
+
+---
+
+# FINAL REPORT
+
+After implementation, provide a concise but precise report in Arabic containing:
+
+1. Features implemented.
+2. Screens/pages added or modified.
+3. Database migrations and tables changed.
+4. Bulk operations implemented.
+5. Inventory sourcing behavior.
+6. Owner analytics and dashboard metrics.
+7. Salesperson analytics and privacy restrictions.
+8. Customer Excel export.
+9. Reset/catalog removal safeguards.
+10. Tests actually executed and their results.
+11. Build and TypeScript results.
+12. Any feature not completed.
+13. Any limitation, risk, or required manual configuration.
+
+Clearly distinguish:
+
+- Implemented.
+- Tested successfully.
+- Implemented but not fully tested.
+- Not implemented.
+
+Do not report success based solely on code inspection or a successful build.
+
+The existing production data, users, invoices, commissions, stock movements, and business history must remain intact throughout implementation and testing.
+
+Begin by inspecting the existing project, then implement the upgrade in place.

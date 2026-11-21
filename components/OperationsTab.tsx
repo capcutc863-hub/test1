@@ -190,6 +190,12 @@ export const OperationsTab: React.FC<OperationsTabProps> = ({
   const [sourcingQtyInput, setSourcingQtyInput] = useState<string>('');
   const [sourcingSupplierInput, setSourcingSupplierInput] = useState<string>('');
   const [sourcingNotesInput, setSourcingNotesInput] = useState<string>('');
+  const [sourcingUnitCostInput, setSourcingUnitCostInput] = useState<string>('');
+  const [sourcingTotalCostInput, setSourcingTotalCostInput] = useState<string>('');
+  const [sourcingDateInput, setSourcingDateInput] = useState<string>(() =>
+    new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' })
+  );
+  const [sourcingIdempotencyKey, setSourcingIdempotencyKey] = useState<string>('');
   const [sourcingError, setSourcingError] = useState<string | null>(null);
   const [isSavingSourcing, setIsSavingSourcing] = useState(false);
 
@@ -546,6 +552,12 @@ export const OperationsTab: React.FC<OperationsTabProps> = ({
     setSourcingQtyInput(pend > 0 ? String(pend) : String(item.quantity));
     setSourcingSupplierInput(item.supplierName || '');
     setSourcingNotesInput(item.sourcingNotes || '');
+    setSourcingUnitCostInput('');
+    setSourcingTotalCostInput('');
+    setSourcingDateInput(new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }));
+    setSourcingIdempotencyKey(
+      `src-${order.id}-${itemIndex}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    );
     setSourcingError(null);
   };
 
@@ -560,6 +572,23 @@ export const OperationsTab: React.FC<OperationsTabProps> = ({
       return;
     }
 
+    const parsedUnitCost =
+      sourcingUnitCostInput.trim() !== '' ? Number(sourcingUnitCostInput) : null;
+    const parsedTotalCost =
+      sourcingTotalCostInput.trim() !== '' ? Number(sourcingTotalCostInput) : null;
+
+    if (parsedUnitCost !== null && (!Number.isFinite(parsedUnitCost) || parsedUnitCost < 0)) {
+      setSourcingError('سعر التكلفة للوحدة يجب أن يكون رقماً غير سالب.');
+      return;
+    }
+    if (parsedTotalCost !== null && (!Number.isFinite(parsedTotalCost) || parsedTotalCost < 0)) {
+      setSourcingError('إجمالي تكلفة التوريد يجب أن يكون رقماً غير سالب.');
+      return;
+    }
+
+    const supportsCost =
+      sourcingAction === 'receive_into_warehouse' || sourcingAction === 'fulfill_external_direct';
+
     setIsSavingSourcing(true);
     try {
       await onManageItemSourcing(sourcingModal.order.id, {
@@ -570,6 +599,12 @@ export const OperationsTab: React.FC<OperationsTabProps> = ({
           : { quantity: parsedQty }),
         ...(sourcingSupplierInput.trim() ? { supplierName: sourcingSupplierInput.trim() } : {}),
         ...(sourcingNotesInput.trim() ? { notes: sourcingNotesInput.trim() } : {}),
+        ...(supportsCost && parsedUnitCost !== null ? { unitCost: parsedUnitCost } : {}),
+        ...(supportsCost && parsedTotalCost !== null ? { totalSourcingCost: parsedTotalCost } : {}),
+        ...(supportsCost && sourcingDateInput ? { dateSecured: sourcingDateInput } : {}),
+        ...(sourcingAction !== 'set_source' && sourcingIdempotencyKey
+          ? { idempotencyKey: sourcingIdempotencyKey }
+          : {}),
       });
       setSourcingModal(null);
     } catch (err: unknown) {
@@ -2207,7 +2242,7 @@ export const OperationsTab: React.FC<OperationsTabProps> = ({
             ) : (
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  الكمية ({sourcingModal.item.unit || 'mg'})
+                  الكمية ({sourcingModal.item.unit || 'قطعة'})
                 </label>
                 <input
                   type="number"
@@ -2245,6 +2280,64 @@ export const OperationsTab: React.FC<OperationsTabProps> = ({
                 />
               </div>
             </div>
+
+            {(sourcingAction === 'receive_into_warehouse' ||
+              sourcingAction === 'fulfill_external_direct') && (
+              <div className="p-3.5 bg-blue-50/60 border border-blue-200 rounded-2xl space-y-3">
+                <p className="text-[11px] font-black text-[#072F5F]">
+                  بيانات تكلفة التوريد الخارجي (اختياري — تُسجل في سجل التكاليف وتُحدّث تقييم التكلفة لاحقاً)
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      سعر التكلفة / {sourcingModal.item.unit || 'وحدة'}
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={sourcingUnitCostInput}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSourcingUnitCostInput(val);
+                        const qty = Number(sourcingQtyInput);
+                        const uCost = Number(val);
+                        if (val.trim() !== '' && Number.isFinite(qty) && Number.isFinite(uCost) && qty > 0) {
+                          setSourcingTotalCostInput(String(Math.round(qty * uCost * 100) / 100));
+                        }
+                      }}
+                      placeholder="اختياري"
+                      className="w-full min-h-[40px] px-3 py-1.5 bg-white rounded-xl border border-blue-200 font-black text-xs tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      إجمالي تكلفة التوريد (ج.م)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={sourcingTotalCostInput}
+                      onChange={(e) => setSourcingTotalCostInput(e.target.value)}
+                      placeholder="اختياري"
+                      className="w-full min-h-[40px] px-3 py-1.5 bg-white rounded-xl border border-blue-200 font-black text-xs tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      تاريخ التوريد
+                    </label>
+                    <input
+                      type="date"
+                      value={sourcingDateInput}
+                      onChange={(e) => setSourcingDateInput(e.target.value)}
+                      className="w-full min-h-[40px] px-3 py-1.5 bg-white rounded-xl border border-blue-200 font-bold text-xs tabular-nums"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="flex gap-2.5 pt-1">
               <button

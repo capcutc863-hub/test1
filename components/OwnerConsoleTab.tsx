@@ -19,10 +19,12 @@ import {
   Users,
   Package,
   ShoppingCart,
+  Trash2,
 } from 'lucide-react';
 import {
   CommissionConfig,
   CommissionMode,
+  PriceListImportRecord,
   Product,
   ProductCategory,
   SalesRep,
@@ -126,6 +128,15 @@ export const OwnerConsoleTab: React.FC<OwnerConsoleTabProps> = ({
     'all' | 'backup_restore' | 'reset' | 'commissions' | 'pdf' | 'security'
   >('all');
   const [auditSearch, setAuditSearch] = useState('');
+
+  // Archived PDF import batch deletion state
+  const [selectedPdfIds, setSelectedPdfIds] = useState<string[]>([]);
+  const [pendingDeleteImports, setPendingDeleteImports] = useState<PriceListImportRecord[] | null>(
+    null
+  );
+  const [pdfDeletePassword, setPdfDeletePassword] = useState('');
+  const [pdfDeleteNeedsPassword, setPdfDeleteNeedsPassword] = useState(false);
+  const [deletingPdfArchive, setDeletingPdfArchive] = useState(false);
 
   useEffect(() => {
     setCommDraft(commissionConfig);
@@ -368,6 +379,48 @@ export const OwnerConsoleTab: React.FC<OwnerConsoleTabProps> = ({
   const refreshAllOwnerAndWorkspace = async () => {
     await onRefreshWorkspace();
     await loadOverview();
+  };
+
+  const handleConfirmDeletePdfArchives = async () => {
+    if (!pendingDeleteImports || pendingDeleteImports.length === 0) return;
+    const hasStepUp = Boolean(getOwnerStepUpToken());
+    if (!hasStepUp && !pdfDeletePassword.trim()) {
+      setPdfDeleteNeedsPassword(true);
+      setErrorMsg('يرجى إدخال كلمة مرور المالك الرئيسي لتأكيد حذف دفعات الاستيراد المؤرشفة.');
+      return;
+    }
+
+    setDeletingPdfArchive(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const ids = pendingDeleteImports.map((item) => item.id);
+      const pw = pdfDeletePassword.trim() || undefined;
+      const res =
+        ids.length === 1
+          ? await apiClient.deletePriceListImport(ids[0], pw)
+          : await apiClient.deletePriceListImportsBulk(ids, pw);
+
+      if (pw) {
+        setStepUpActive(true);
+      }
+      setSelectedPdfIds((prev) => prev.filter((id) => !res.deletedIds.includes(id)));
+      setPendingDeleteImports(null);
+      setPdfDeletePassword('');
+      setPdfDeleteNeedsPassword(false);
+      setStatusMsg(
+        `تم حذف ${res.deletedCount} دفعة من سجل الاستيراد المؤرشف فقط. المنتجات والأسعار والمخزون والفواتير لم تتأثر ✅`
+      );
+      await loadOverview();
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.requiresOwnerReauth) {
+        setStepUpActive(false);
+        setPdfDeleteNeedsPassword(true);
+      }
+      setErrorMsg(err instanceof Error ? err.message : 'تعذر حذف دفعات الاستيراد المؤرشفة.');
+    } finally {
+      setDeletingPdfArchive(false);
+    }
   };
 
   const analytics = overview?.commissionAnalytics;
@@ -1125,52 +1178,213 @@ export const OwnerConsoleTab: React.FC<OwnerConsoleTabProps> = ({
       )}
 
       {/* 4. PDF Imports Summary Sub-Tab */}
-      {subTab === 'pdf' && (
-        <div className="bg-white p-5 sm:p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h4 className="text-base font-black text-slate-900">استيراد وأرشيف قوائم الأسعار PDF</h4>
-              <p className="text-xs font-bold text-slate-500">
-                متاح حصرياً للمالك الرئيسي — يتم أرشفة الملف الأصلي دون المساس بالمخزون
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={onOpenPdfImport}
-              className="min-h-[44px] px-5 py-2.5 bg-[#0A468C] hover:bg-[#072F5F] text-white rounded-2xl font-black text-xs flex items-center gap-2"
-            >
-              <FileUp className="w-4 h-4" />
-              فتح نافذة الاستيراد والمراجعة
-            </button>
-          </div>
-
-          <div className="space-y-2">
-            {(overview?.priceListImports || []).map((imp) => (
-              <div
-                key={imp.id}
-                className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
-              >
-                <div className="space-y-0.5">
-                  <p className="font-black text-slate-900">
-                    {imp.fileName} — {imp.status === 'approved' ? 'معتمد' : imp.status === 'cancelled' ? 'ملغي' : 'بانتظار المراجعة'}
-                  </p>
-                  <p className="text-[11px] font-bold text-slate-500 tabular-nums">
-                    {new Date(imp.uploadedAt).toLocaleString('ar-EG')} · أصناف: {imp.totalParsed}
-                  </p>
-                </div>
+      {subTab === 'pdf' && (() => {
+        const archivedImports = overview?.priceListImports || [];
+        const allArchivedSelected =
+          archivedImports.length > 0 && selectedPdfIds.length === archivedImports.length;
+        return (
+          <div className="bg-white p-5 sm:p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h4 className="text-base font-black text-slate-900">استيراد وأرشيف قوائم الأسعار PDF</h4>
+                <p className="text-xs font-bold text-slate-500">
+                  متاح حصرياً للمالك الرئيسي — يتم أرشفة الملف الأصلي دون المساس بالمخزون، وحذف الأرشيف يزيل السجل فقط
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {archivedImports.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedPdfIds(
+                        allArchivedSelected ? [] : archivedImports.map((item) => item.id)
+                      )
+                    }
+                    className="min-h-[44px] px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-2xl font-black text-xs"
+                  >
+                    {allArchivedSelected
+                      ? 'إلغاء تحديد الكل'
+                      : `تحديد الكل (${archivedImports.length})`}
+                  </button>
+                )}
+                {selectedPdfIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPdfDeleteNeedsPassword(!getOwnerStepUpToken());
+                      setPdfDeletePassword('');
+                      setPendingDeleteImports(
+                        archivedImports.filter((item) => selectedPdfIds.includes(item.id))
+                      );
+                    }}
+                    className="min-h-[44px] px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-xs flex items-center gap-1.5"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    حذف المحدد ({selectedPdfIds.length})
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => void apiClient.downloadPriceListOriginalFile(imp.id, imp.fileName)}
-                  className="min-h-[36px] px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-100 rounded-xl font-black text-xs flex items-center gap-1.5 shrink-0"
+                  onClick={onOpenPdfImport}
+                  className="min-h-[44px] px-5 py-2.5 bg-[#0A468C] hover:bg-[#072F5F] text-white rounded-2xl font-black text-xs flex items-center gap-2"
                 >
-                  <Download className="w-3.5 h-3.5" />
-                  تحميل PDF الأصلي
+                  <FileUp className="w-4 h-4" />
+                  فتح نافذة الاستيراد والمراجعة
                 </button>
               </div>
-            ))}
+            </div>
+
+            {archivedImports.length === 0 ? (
+              <div className="p-6 bg-slate-50 border border-slate-200 rounded-2xl text-center text-xs font-bold text-slate-500">
+                لا توجد دفعات استيراد مؤرشفة حالياً.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {archivedImports.map((imp) => {
+                  const isChecked = selectedPdfIds.includes(imp.id);
+                  return (
+                    <div
+                      key={imp.id}
+                      className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs transition-colors ${
+                        isChecked
+                          ? 'bg-red-50/70 border-red-200'
+                          : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() =>
+                            setSelectedPdfIds((prev) =>
+                              prev.includes(imp.id)
+                                ? prev.filter((id) => id !== imp.id)
+                                : [...prev, imp.id]
+                            )
+                          }
+                          aria-label={`تحديد الدفعة ${imp.fileName}`}
+                          className="mt-0.5 w-4 h-4 accent-red-600 rounded shrink-0"
+                        />
+                        <div className="space-y-0.5 min-w-0">
+                          <p className="font-black text-slate-900 break-words">
+                            {imp.fileName} —{' '}
+                            {imp.status === 'approved'
+                              ? 'معتمد'
+                              : imp.status === 'cancelled'
+                                ? 'ملغي'
+                                : 'بانتظار المراجعة'}
+                          </p>
+                          <p className="text-[11px] font-bold text-slate-500 tabular-nums">
+                            {new Date(imp.uploadedAt).toLocaleString('ar-EG')} · أصناف:{' '}
+                            {imp.totalParsed}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void apiClient.downloadPriceListOriginalFile(imp.id, imp.fileName)}
+                          className="min-h-[36px] px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-100 rounded-xl font-black text-xs flex items-center gap-1.5"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          تحميل PDF الأصلي
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPdfDeleteNeedsPassword(!getOwnerStepUpToken());
+                            setPdfDeletePassword('');
+                            setPendingDeleteImports([imp]);
+                          }}
+                          className="min-h-[36px] px-3 py-1.5 bg-red-50 hover:bg-red-600 text-red-700 hover:text-white border border-red-200 rounded-xl font-black text-xs flex items-center gap-1.5 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          حذف الدفعة
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {pendingDeleteImports && pendingDeleteImports.length > 0 && (
+              <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-[860]">
+                <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl space-y-4 border border-red-200">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 bg-red-100 text-red-700 rounded-2xl shrink-0">
+                      <Trash2 className="w-5 h-5" />
+                    </div>
+                    <div className="space-y-1">
+                      <h5 className="text-base font-black text-slate-900">
+                        تأكيد حذف دفعات الاستيراد المؤرشفة ({pendingDeleteImports.length})
+                      </h5>
+                      <p className="text-xs font-bold text-slate-600 leading-relaxed">
+                        سيتم حذف سجل الاستيراد والملف المؤرشف فقط.{' '}
+                        <span className="text-emerald-700">
+                          لن يتم حذف أو تعديل أي منتجات أو أسعار معتمدة أو مخزون أو فواتير.
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="max-h-36 overflow-y-auto space-y-1 bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xs font-bold text-slate-700">
+                    {pendingDeleteImports.map((item) => (
+                      <div key={item.id} className="truncate">
+                        • {item.fileName} (
+                        {item.status === 'approved'
+                          ? 'معتمد'
+                          : item.status === 'cancelled'
+                            ? 'ملغي'
+                            : 'بانتظار المراجعة'}
+                        )
+                      </div>
+                    ))}
+                  </div>
+
+                  {pdfDeleteNeedsPassword && (
+                    <div className="space-y-1.5">
+                      <label className="block text-xs font-black text-slate-700">
+                        كلمة مرور المالك الرئيسي للتأكيد
+                      </label>
+                      <input
+                        type="password"
+                        value={pdfDeletePassword}
+                        onChange={(e) => setPdfDeletePassword(e.target.value)}
+                        placeholder="أدخل كلمة مرور المالك..."
+                        className="w-full min-h-[42px] px-3.5 py-2 bg-slate-50 border border-red-200 rounded-xl font-bold text-xs outline-none focus:border-red-500"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      disabled={deletingPdfArchive}
+                      onClick={() => {
+                        setPendingDeleteImports(null);
+                        setPdfDeletePassword('');
+                        setPdfDeleteNeedsPassword(false);
+                      }}
+                      className="min-h-[42px] px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-black text-xs"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deletingPdfArchive}
+                      onClick={() => void handleConfirmDeletePdfArchives()}
+                      className="min-h-[42px] px-5 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl font-black text-xs disabled:opacity-60"
+                    >
+                      {deletingPdfArchive ? 'جاري الحذف...' : 'تأكيد حذف الأرشيف فقط'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* 5. Backup & Restore Center */}
       {subTab === 'security_backup' && (

@@ -1,6 +1,7 @@
 import {
   boolean,
   doublePrecision,
+  index,
   integer,
   jsonb,
   pgTable,
@@ -23,6 +24,7 @@ import type {
   OrderShippingInfo,
   OrderStatusHistoryEntry,
   PriceListColumnMapping,
+  PriceListImportConfig,
   PriceListParsedItem,
 } from '../../types.ts';
 
@@ -70,27 +72,83 @@ export const productCategories = pgTable('product_categories', {
   createdAt: text('created_at').notNull().default(''),
 });
 
-// Multi-category inventory products catalog
-export const products = pgTable('products', {
+// Dynamic Oil Grades managed by Owner
+export const oilGrades = pgTable('oil_grades', {
   id: text('id').primaryKey(),
-  code: text('code'),
-  name: text('name').notNull(),
-  categoryId: text('category_id'),
-  categoryName: text('category_name'),
-  description: text('description'),
-  unit: text('unit').notNull().default('mg'),
-  grade: text('grade').notNull().default(''),
-  pricePerMg: doublePrecision('price_per_mg').notNull(),
-  costPrice: doublePrecision('cost_price'),
-  stock: integer('stock').notNull().default(0),
+  name: text('name').notNull().unique(),
+  slug: text('slug').notNull().unique(),
+  sortOrder: integer('sort_order').notNull().default(0),
   isActive: boolean('is_active').notNull().default(true),
-  isCommissionEligible: boolean('is_commission_eligible').notNull().default(true),
-  commissionMode: text('commission_mode').notNull().default('inherit_rep'),
-  customCommissionRate: doublePrecision('custom_commission_rate'),
-  customCommissionFixed: doublePrecision('custom_commission_fixed'),
-  createdAt: text('created_at'),
-  updatedAt: text('updated_at'),
+  aliases: jsonb('aliases').$type<string[]>().notNull().default([]),
+  description: text('description'),
+  createdAt: text('created_at').notNull().default(''),
+  updatedAt: text('updated_at').notNull().default(''),
 });
+
+// Multi-category inventory products catalog
+export const products = pgTable(
+  'products',
+  {
+    id: text('id').primaryKey(),
+    code: text('code'),
+    name: text('name').notNull(),
+    categoryId: text('category_id'),
+    categoryName: text('category_name'),
+    description: text('description'),
+    unit: text('unit').notNull().default('mg'),
+    grade: text('grade').notNull().default(''),
+    gradeId: text('grade_id'),
+    baseProductName: text('base_product_name'),
+    baseProductKey: text('base_product_key'),
+    pricePerMg: doublePrecision('price_per_mg').notNull(),
+    costPrice: doublePrecision('cost_price'),
+    costUpdatedAt: text('cost_updated_at'),
+    stock: doublePrecision('stock').notNull().default(0),
+    isActive: boolean('is_active').notNull().default(true),
+    isCommissionEligible: boolean('is_commission_eligible').notNull().default(true),
+    commissionMode: text('commission_mode').notNull().default('inherit_rep'),
+    customCommissionRate: doublePrecision('custom_commission_rate'),
+    customCommissionFixed: doublePrecision('custom_commission_fixed'),
+    createdAt: text('created_at'),
+    updatedAt: text('updated_at'),
+  },
+  (table) => [
+    index('products_category_idx').on(table.categoryId),
+    index('products_active_idx').on(table.isActive),
+    index('products_code_idx').on(table.code),
+    index('products_grade_idx').on(table.gradeId),
+    index('products_base_key_idx').on(table.baseProductKey),
+  ]
+);
+
+// Persistent selling price & cost price change history per product SKU
+export const productPriceHistory = pgTable(
+  'product_price_history',
+  {
+    id: text('id').primaryKey(),
+    productId: text('product_id').notNull(),
+    productCode: text('product_code'),
+    productName: text('product_name').notNull(),
+    grade: text('grade').notNull().default(''),
+    previousSellingPrice: doublePrecision('previous_selling_price'),
+    newSellingPrice: doublePrecision('new_selling_price'),
+    previousCostPrice: doublePrecision('previous_cost_price'),
+    newCostPrice: doublePrecision('new_cost_price'),
+    unit: text('unit').notNull().default('جرام'),
+    sourceType: text('source_type').notNull().default('manual'),
+    importBatchId: text('import_batch_id'),
+    actorId: text('actor_id').notNull(),
+    actorName: text('actor_name').notNull(),
+    actorRole: text('actor_role').notNull(),
+    note: text('note'),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [
+    index('price_history_product_idx').on(table.productId),
+    index('price_history_created_at_idx').on(table.createdAt),
+    index('price_history_batch_idx').on(table.importBatchId),
+  ]
+);
 
 // System & Owner settings (commission config, owner recovery key hash, general config)
 export const systemSettings = pgTable('system_settings', {
@@ -128,6 +186,7 @@ export const priceListImports = pgTable('price_list_imports', {
   listCategoryId: text('list_category_id'),
   listCategoryName: text('list_category_name'),
   columnMapping: jsonb('column_mapping').$type<PriceListColumnMapping | null>().default(null),
+  importConfig: jsonb('import_config').$type<PriceListImportConfig | null>().default(null),
   rawTableRows: jsonb('raw_table_rows').$type<string[][]>().notNull().default([]),
   uploadedById: text('uploaded_by_id').notNull(),
   uploadedByName: text('uploaded_by_name').notNull(),
@@ -168,123 +227,198 @@ export const salesReps = pgTable('sales_reps', {
 });
 
 // Wholesale customers
-export const customers = pgTable('customers', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  phone: text('phone').notNull().default(''),
-  address: text('address'),
-  totalSpent: doublePrecision('total_spent').notNull().default(0),
-  classification: text('classification').notNull().default('عادي'),
-  lastOrderDate: text('last_order_date').notNull().default(''),
-  returnHistory: jsonb('return_history').$type<CustomerReturnHistoryEntry[]>().notNull().default([]),
-});
+export const customers = pgTable(
+  'customers',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    phone: text('phone').notNull().default(''),
+    address: text('address'),
+    totalSpent: doublePrecision('total_spent').notNull().default(0),
+    classification: text('classification').notNull().default('عادي'),
+    lastOrderDate: text('last_order_date').notNull().default(''),
+    assignedSalesRepId: text('assigned_sales_rep_id'),
+    assignedSalesRepName: text('assigned_sales_rep_name'),
+    returnHistory: jsonb('return_history').$type<CustomerReturnHistoryEntry[]>().notNull().default([]),
+  },
+  (table) => [
+    index('customers_assigned_rep_idx').on(table.assignedSalesRepId),
+    index('customers_phone_idx').on(table.phone),
+  ]
+);
 
 // Sales invoices / orders
-export const orders = pgTable('orders', {
-  id: text('id').primaryKey(),
-  customerName: text('customer_name').notNull(),
-  customerPhone: text('customer_phone').notNull().default(''),
-  customerAddress: text('customer_address').notNull().default(''),
-  governorate: text('governorate'),
-  customerNotes: text('customer_notes'),
-  operationalNotes: text('operational_notes'),
-  salesRepId: text('sales_rep_id').notNull(),
-  salesRepName: text('sales_rep_name').notNull(),
-  items: jsonb('items').$type<OrderItem[]>().notNull(),
-  subtotal: doublePrecision('subtotal').notNull(),
-  discountPercentage: doublePrecision('discount_percentage').notNull().default(0),
-  discountAmount: doublePrecision('discount_amount').notNull().default(0),
-  shippingCost: doublePrecision('shipping_cost').notNull().default(0),
-  totalAmount: doublePrecision('total_amount').notNull(),
-  status: text('status').notNull(),
-  createdAt: text('created_at').notNull(),
-  commission: doublePrecision('commission').notNull().default(0),
-  commissionableSubtotal: doublePrecision('commissionable_subtotal'),
-  commissionRateSnapshot: doublePrecision('commission_rate_snapshot'),
-  commissionRuleSnapshot: jsonb('commission_rule_snapshot')
-    .$type<OrderCommissionSnapshot | null>()
-    .default(null),
-  version: integer('version').notNull().default(1),
-  confirmedAt: text('confirmed_at'),
-  confirmedById: text('confirmed_by_id'),
-  confirmedByName: text('confirmed_by_name'),
-  prepStartedAt: text('prep_started_at'),
-  prepCompletedAt: text('prep_completed_at'),
-  shippedAt: text('shipped_at'),
-  deliveredAt: text('delivered_at'),
-  cancelledAt: text('cancelled_at'),
-  returnedAt: text('returned_at'),
-  pendingEditRequest: jsonb('pending_edit_request').$type<OrderEditRequest | null>().default(null),
-  statusHistory: jsonb('status_history').$type<OrderStatusHistoryEntry[]>().notNull().default([]),
-  shippingInfo: jsonb('shipping_info').$type<OrderShippingInfo | null>().default(null),
-  deliveryInfo: jsonb('delivery_info').$type<OrderDeliveryInfo | null>().default(null),
-  returnInfo: jsonb('return_info').$type<OrderReturnInfo | null>().default(null),
-  holdInfo: jsonb('hold_info').$type<OrderHoldInfo | null>().default(null),
-  revisionAlert: jsonb('revision_alert').$type<OrderRevisionAlert | null>().default(null),
-  cancellationInfo: jsonb('cancellation_info').$type<OrderCancellationInfo | null>().default(null),
-});
+export const orders = pgTable(
+  'orders',
+  {
+    id: text('id').primaryKey(),
+    customerName: text('customer_name').notNull(),
+    customerPhone: text('customer_phone').notNull().default(''),
+    customerAddress: text('customer_address').notNull().default(''),
+    governorate: text('governorate'),
+    customerNotes: text('customer_notes'),
+    operationalNotes: text('operational_notes'),
+    salesRepId: text('sales_rep_id').notNull(),
+    salesRepName: text('sales_rep_name').notNull(),
+    items: jsonb('items').$type<OrderItem[]>().notNull(),
+    subtotal: doublePrecision('subtotal').notNull(),
+    discountPercentage: doublePrecision('discount_percentage').notNull().default(0),
+    discountAmount: doublePrecision('discount_amount').notNull().default(0),
+    shippingCost: doublePrecision('shipping_cost').notNull().default(0),
+    totalAmount: doublePrecision('total_amount').notNull(),
+    status: text('status').notNull(),
+    createdAt: text('created_at').notNull(),
+    commission: doublePrecision('commission').notNull().default(0),
+    commissionableSubtotal: doublePrecision('commissionable_subtotal'),
+    commissionRateSnapshot: doublePrecision('commission_rate_snapshot'),
+    commissionRuleSnapshot: jsonb('commission_rule_snapshot')
+      .$type<OrderCommissionSnapshot | null>()
+      .default(null),
+    version: integer('version').notNull().default(1),
+    confirmedAt: text('confirmed_at'),
+    confirmedById: text('confirmed_by_id'),
+    confirmedByName: text('confirmed_by_name'),
+    prepStartedAt: text('prep_started_at'),
+    prepCompletedAt: text('prep_completed_at'),
+    shippedAt: text('shipped_at'),
+    deliveredAt: text('delivered_at'),
+    cancelledAt: text('cancelled_at'),
+    returnedAt: text('returned_at'),
+    pendingEditRequest: jsonb('pending_edit_request').$type<OrderEditRequest | null>().default(null),
+    statusHistory: jsonb('status_history').$type<OrderStatusHistoryEntry[]>().notNull().default([]),
+    shippingInfo: jsonb('shipping_info').$type<OrderShippingInfo | null>().default(null),
+    deliveryInfo: jsonb('delivery_info').$type<OrderDeliveryInfo | null>().default(null),
+    returnInfo: jsonb('return_info').$type<OrderReturnInfo | null>().default(null),
+    holdInfo: jsonb('hold_info').$type<OrderHoldInfo | null>().default(null),
+    revisionAlert: jsonb('revision_alert').$type<OrderRevisionAlert | null>().default(null),
+    cancellationInfo: jsonb('cancellation_info').$type<OrderCancellationInfo | null>().default(null),
+  },
+  (table) => [
+    index('orders_created_at_idx').on(table.createdAt),
+    index('orders_sales_rep_idx').on(table.salesRepId),
+    index('orders_status_idx').on(table.status),
+    index('orders_delivered_at_idx').on(table.deliveredAt),
+    index('orders_confirmed_at_idx').on(table.confirmedAt),
+  ]
+);
 
 // Invoice revision history (versioned before/after diffs and operations review state)
-export const orderRevisions = pgTable('order_revisions', {
-  id: text('id').primaryKey(),
-  orderId: text('order_id').notNull(),
-  fromVersion: integer('from_version').notNull(),
-  toVersion: integer('to_version').notNull(),
-  editedById: text('edited_by_id').notNull(),
-  editedByName: text('edited_by_name').notNull(),
-  editedByRole: text('edited_by_role').notNull(),
-  editedAt: text('edited_at').notNull(),
-  reason: text('reason'),
-  orderStatusAtEdit: text('order_status_at_edit').notNull(),
-  addedItems: jsonb('added_items').$type<OrderRevisionItemDiff[]>().notNull().default([]),
-  removedItems: jsonb('removed_items').$type<OrderRevisionItemDiff[]>().notNull().default([]),
-  modifiedItems: jsonb('modified_items').$type<OrderRevisionItemDiff[]>().notNull().default([]),
-  previousItemCount: integer('previous_item_count').notNull(),
-  newItemCount: integer('new_item_count').notNull(),
-  previousTotal: doublePrecision('previous_total').notNull(),
-  newTotal: doublePrecision('new_total').notNull(),
-  previousCommission: doublePrecision('previous_commission').notNull(),
-  newCommission: doublePrecision('new_commission').notNull(),
-  requiresRePreparation: boolean('requires_re_preparation').notNull().default(false),
-  reviewStatus: text('review_status').notNull().default('لا يوجد تعديل معلق'),
-  reviewedById: text('reviewed_by_id'),
-  reviewedByName: text('reviewed_by_name'),
-  reviewedAt: text('reviewed_at'),
-  reviewNote: text('review_note'),
-});
+export const orderRevisions = pgTable(
+  'order_revisions',
+  {
+    id: text('id').primaryKey(),
+    orderId: text('order_id').notNull(),
+    fromVersion: integer('from_version').notNull(),
+    toVersion: integer('to_version').notNull(),
+    editedById: text('edited_by_id').notNull(),
+    editedByName: text('edited_by_name').notNull(),
+    editedByRole: text('edited_by_role').notNull(),
+    editedAt: text('edited_at').notNull(),
+    reason: text('reason'),
+    orderStatusAtEdit: text('order_status_at_edit').notNull(),
+    addedItems: jsonb('added_items').$type<OrderRevisionItemDiff[]>().notNull().default([]),
+    removedItems: jsonb('removed_items').$type<OrderRevisionItemDiff[]>().notNull().default([]),
+    modifiedItems: jsonb('modified_items').$type<OrderRevisionItemDiff[]>().notNull().default([]),
+    previousItemCount: integer('previous_item_count').notNull(),
+    newItemCount: integer('new_item_count').notNull(),
+    previousTotal: doublePrecision('previous_total').notNull(),
+    newTotal: doublePrecision('new_total').notNull(),
+    previousCommission: doublePrecision('previous_commission').notNull(),
+    newCommission: doublePrecision('new_commission').notNull(),
+    requiresRePreparation: boolean('requires_re_preparation').notNull().default(false),
+    reviewStatus: text('review_status').notNull().default('لا يوجد تعديل معلق'),
+    reviewedById: text('reviewed_by_id'),
+    reviewedByName: text('reviewed_by_name'),
+    reviewedAt: text('reviewed_at'),
+    reviewNote: text('review_note'),
+  },
+  (table) => [index('order_revisions_order_id_idx').on(table.orderId)]
+);
 
 // Warehouse stock & item sourcing movements ledger (prevents double deduction / tracks supplier receipts)
-export const stockMovements = pgTable('stock_movements', {
-  id: text('id').primaryKey(),
-  productId: text('product_id'),
-  productName: text('product_name').notNull(),
-  grade: text('grade').notNull(),
-  orderId: text('order_id'),
-  movementType: text('movement_type').notNull(),
-  sourcingSource: text('sourcing_source').notNull(),
-  quantityDelta: integer('quantity_delta').notNull().default(0),
-  orderQuantityCovered: integer('order_quantity_covered').notNull().default(0),
-  previousStock: integer('previous_stock').notNull().default(0),
-  newStock: integer('new_stock').notNull().default(0),
-  supplierName: text('supplier_name'),
-  note: text('note'),
-  actorId: text('actor_id').notNull(),
-  actorName: text('actor_name').notNull(),
-  actorRole: text('actor_role').notNull(),
-  createdAt: text('created_at').notNull(),
-});
+export const stockMovements = pgTable(
+  'stock_movements',
+  {
+    id: text('id').primaryKey(),
+    productId: text('product_id'),
+    productName: text('product_name').notNull(),
+    grade: text('grade').notNull(),
+    unit: text('unit'),
+    orderId: text('order_id'),
+    movementType: text('movement_type').notNull(),
+    sourcingSource: text('sourcing_source').notNull(),
+    quantityDelta: doublePrecision('quantity_delta').notNull().default(0),
+    orderQuantityCovered: doublePrecision('order_quantity_covered').notNull().default(0),
+    previousStock: doublePrecision('previous_stock').notNull().default(0),
+    newStock: doublePrecision('new_stock').notNull().default(0),
+    supplierName: text('supplier_name'),
+    note: text('note'),
+    idempotencyKey: text('idempotency_key'),
+    actorId: text('actor_id').notNull(),
+    actorName: text('actor_name').notNull(),
+    actorRole: text('actor_role').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [
+    index('stock_movements_product_idx').on(table.productId),
+    index('stock_movements_order_idx').on(table.orderId),
+    index('stock_movements_created_at_idx').on(table.createdAt),
+    index('stock_movements_idemp_idx').on(table.idempotencyKey),
+  ]
+);
+
+// External sourcing & supplier acquisition ledger (tracks sourcing costs cleanly when known)
+export const externalSourcingRecords = pgTable(
+  'external_sourcing_records',
+  {
+    id: text('id').primaryKey(),
+    orderId: text('order_id').notNull(),
+    itemIndex: integer('item_index').notNull().default(0),
+    productId: text('product_id'),
+    productCode: text('product_code'),
+    productName: text('product_name').notNull(),
+    categoryId: text('category_id'),
+    categoryName: text('category_name'),
+    unit: text('unit').notNull().default('mg'),
+    sourcingType: text('sourcing_type').notNull(),
+    supplierName: text('supplier_name'),
+    externalQty: doublePrecision('external_qty').notNull(),
+    unitCost: doublePrecision('unit_cost'),
+    totalSourcingCost: doublePrecision('total_sourcing_cost'),
+    dateSecured: text('date_secured').notNull(),
+    notes: text('notes'),
+    idempotencyKey: text('idempotency_key'),
+    recordedById: text('recorded_by_id').notNull(),
+    recordedByName: text('recorded_by_name').notNull(),
+    recordedAt: text('recorded_at').notNull(),
+  },
+  (table) => [
+    index('ext_sourcing_order_idx').on(table.orderId),
+    index('ext_sourcing_product_idx').on(table.productId),
+    index('ext_sourcing_date_idx').on(table.dateSecured),
+    index('ext_sourcing_idemp_idx').on(table.idempotencyKey),
+  ]
+);
 
 // Persistent security and operational audit log
-export const auditLogs = pgTable('audit_logs', {
-  id: text('id').primaryKey(),
-  orderId: text('order_id'),
-  actionType: text('action_type').notNull(),
-  actorId: text('actor_id').notNull(),
-  actorName: text('actor_name').notNull(),
-  actorRole: text('actor_role').notNull(),
-  details: jsonb('details').$type<Record<string, unknown>>().notNull().default({}),
-  createdAt: text('created_at').notNull(),
-});
+export const auditLogs = pgTable(
+  'audit_logs',
+  {
+    id: text('id').primaryKey(),
+    orderId: text('order_id'),
+    actionType: text('action_type').notNull(),
+    actorId: text('actor_id').notNull(),
+    actorName: text('actor_name').notNull(),
+    actorRole: text('actor_role').notNull(),
+    details: jsonb('details').$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [
+    index('audit_logs_created_at_idx').on(table.createdAt),
+    index('audit_logs_order_idx').on(table.orderId),
+    index('audit_logs_action_idx').on(table.actionType),
+  ]
+);
 
 // Internal team chat messages
 export const chatMessages = pgTable('chat_messages', {
@@ -305,7 +439,7 @@ export const backupRecords = pgTable('backup_records', {
   createdByName: text('created_by_name').notNull(),
   appVersion: text('app_version').notNull(),
   schemaVersion: integer('schema_version').notNull().default(2),
-  tablesCount: integer('tables_count').notNull().default(14),
+  tablesCount: integer('tables_count').notNull().default(15),
   totalRecords: integer('total_records').notNull().default(0),
   attachmentsCount: integer('attachments_count').notNull().default(0),
   recordCounts: jsonb('record_counts').$type<Record<string, number>>().notNull().default({}),
@@ -317,4 +451,5 @@ export const backupRecords = pgTable('backup_records', {
   verificationNotes: text('verification_notes'),
   archiveBase64: text('archive_base64').notNull().default(''),
 });
+
 

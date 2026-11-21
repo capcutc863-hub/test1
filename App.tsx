@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -21,6 +21,7 @@ import {
   ClipboardList,
   ShieldCheck,
   KeyRound,
+  BarChart3,
 } from 'lucide-react';
 import {
   Product,
@@ -31,6 +32,7 @@ import {
   User,
   ChatMessage,
   ProductCategory,
+  OilGradeRecord,
   CommissionConfig,
   SystemGeneralSettings,
 } from './types';
@@ -53,6 +55,7 @@ import { UsersTab } from './components/UsersTab';
 import { TeamChatModal } from './components/TeamChatModal';
 import { OwnerConsoleTab } from './components/OwnerConsoleTab';
 import { PdfPriceImportModal } from './components/PdfPriceImportModal';
+import { ReportsCenterTab } from './components/ReportsCenterTab';
 
 type AppTab =
   | 'dashboard'
@@ -63,6 +66,7 @@ type AppTab =
   | 'delivered-orders'
   | 'inventory'
   | 'customers'
+  | 'reports'
   | 'admin-users'
   | 'owner-console';
 
@@ -98,6 +102,7 @@ const AppContent: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<ProductCategory[]>(DEFAULT_CATEGORIES);
+  const [oilGrades, setOilGrades] = useState<OilGradeRecord[]>([]);
   const [commissionConfig, setCommissionConfig] = useState<CommissionConfig>(DEFAULT_COMMISSION_CONFIG);
   const [generalSettings, setGeneralSettings] = useState<SystemGeneralSettings>(DEFAULT_GENERAL_SETTINGS);
   const [hasOwnerAccount, setHasOwnerAccount] = useState<boolean>(true);
@@ -109,6 +114,8 @@ const AppContent: React.FC = () => {
 
   const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [hasLoadedWorkspace, setHasLoadedWorkspace] = useState(false);
+  const hydratedTokenRef = useRef<string | null>(null);
 
   const [showOrderForm, setShowOrderForm] = useState(false);
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
@@ -143,6 +150,7 @@ const AppContent: React.FC = () => {
       users: User[];
       products: Product[];
       categories?: ProductCategory[];
+      oilGrades?: OilGradeRecord[];
       commissionConfig?: CommissionConfig;
       generalSettings?: SystemGeneralSettings;
       hasOwnerAccount?: boolean;
@@ -156,6 +164,9 @@ const AppContent: React.FC = () => {
       setProducts(data.products);
       if (Array.isArray(data.categories) && data.categories.length > 0) {
         setCategories(data.categories);
+      }
+      if (Array.isArray(data.oilGrades)) {
+        setOilGrades(data.oilGrades);
       }
       if (data.commissionConfig) {
         setCommissionConfig(data.commissionConfig);
@@ -175,15 +186,27 @@ const AppContent: React.FC = () => {
       setCustomers(data.customers);
       setOrders(data.orders);
       setChatMessages(data.chatMessages);
+      setHasLoadedWorkspace(true);
 
-      if (authUser) {
-        const refreshedSelf = data.users.find((u) => u.id === authUser.id);
-        if (refreshedSelf) {
-          setAuthUser(refreshedSelf);
-        }
-      }
+      setAuthUser((prev) => {
+        if (!prev) return prev;
+        const refreshedSelf = data.users.find((u) => u.id === prev.id);
+        if (!refreshedSelf) return prev;
+        const unchanged =
+          prev.role === refreshedSelf.role &&
+          prev.name === refreshedSelf.name &&
+          prev.isSuspended === refreshedSelf.isSuspended &&
+          prev.isMuted === refreshedSelf.isMuted &&
+          prev.canEditInventory === refreshedSelf.canEditInventory &&
+          prev.canConfirmDelivery === refreshedSelf.canConfirmDelivery &&
+          prev.canManageOrderStatus === refreshedSelf.canManageOrderStatus &&
+          prev.canDeleteOrders === refreshedSelf.canDeleteOrders &&
+          prev.canDeleteCustomers === refreshedSelf.canDeleteCustomers &&
+          prev.salesRepId === refreshedSelf.salesRepId;
+        return unchanged ? prev : refreshedSelf;
+      });
     },
-    [authUser?.id, setAuthUser]
+    [setAuthUser]
   );
 
   const refreshData = useCallback(async () => {
@@ -203,6 +226,10 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     if (authUser && authToken) {
+      if (hydratedTokenRef.current === authToken) {
+        return;
+      }
+      hydratedTokenRef.current = authToken;
       if (initialWorkspace) {
         applyWorkspaceData(initialWorkspace);
         clearInitialWorkspace();
@@ -212,9 +239,12 @@ const AppContent: React.FC = () => {
         void refreshData();
       }
     } else {
+      hydratedTokenRef.current = null;
+      setHasLoadedWorkspace(false);
       setUsers([]);
       setProducts([]);
       setCategories(DEFAULT_CATEGORIES);
+      setOilGrades([]);
       setCommissionConfig(DEFAULT_COMMISSION_CONFIG);
       setGeneralSettings(DEFAULT_GENERAL_SETTINGS);
       setHasOwnerAccount(true);
@@ -551,7 +581,12 @@ const AppContent: React.FC = () => {
     }
   };
 
-  const handleAddCustomer = async (customerData: { name: string; phone: string; address?: string }) => {
+  const handleAddCustomer = async (customerData: {
+    name: string;
+    phone: string;
+    address?: string;
+    assignedSalesRepId?: string | null;
+  }) => {
     try {
       await apiClient.createCustomer(customerData);
       await refreshData();
@@ -563,7 +598,12 @@ const AppContent: React.FC = () => {
 
   const handleUpdateCustomer = async (
     customerId: string,
-    customerData: { name: string; phone?: string; address?: string }
+    customerData: {
+      name: string;
+      phone?: string;
+      address?: string;
+      assignedSalesRepId?: string | null;
+    }
   ) => {
     try {
       const res = await apiClient.updateCustomer(customerId, customerData);
@@ -867,8 +907,8 @@ const AppContent: React.FC = () => {
     );
   }
 
-  // 2. Fallback Loading Skeleton (only shown if workspace wasn't already hydrated on login)
-  if (dataLoading && products.length === 0 && orders.length === 0) {
+  // 2. Fallback Loading Skeleton (only shown before initial workspace hydration for this session)
+  if (dataLoading && !hasLoadedWorkspace) {
     return (
       <div className="min-h-screen bg-[#F8FAFC] p-4 sm:p-8 font-cairo space-y-6" dir="rtl">
         <div className="bg-[#072F5F] rounded-3xl p-6 text-white flex items-center justify-between">
@@ -899,7 +939,7 @@ const AppContent: React.FC = () => {
     );
   }
 
-  if (dataError && products.length === 0 && orders.length === 0) {
+  if (dataError && !hasLoadedWorkspace) {
     return (
       <div className="h-screen bg-[#072F5F] flex items-center justify-center p-4 font-cairo" dir="rtl">
         <div className="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl text-center space-y-4">
@@ -1006,6 +1046,13 @@ const AppContent: React.FC = () => {
       label: 'العملاء والتسويق',
       shortLabel: 'العملاء',
       icon: <Users className="w-5 h-5" />,
+      visible: true,
+    },
+    {
+      id: 'reports',
+      label: 'التقارير والتحليلات',
+      shortLabel: 'التقارير',
+      icon: <BarChart3 className="w-5 h-5" />,
       visible: true,
     },
     {
@@ -1226,6 +1273,7 @@ const AppContent: React.FC = () => {
               {activeTab === 'delivered-orders' && 'طلبات تم تسليمها'}
               {activeTab === 'inventory' && canAccessInventory && 'كتالوج المنتجات والمخزون'}
               {activeTab === 'customers' && 'إدارة العملاء والتسويق الذكي'}
+              {activeTab === 'reports' && 'مركز التقارير والتحليلات الموحد'}
               {activeTab === 'admin-users' && canAccessUsers && 'فريق العمل والعمولات'}
               {activeTab === 'owner-console' && canAccessOwnerConsole && 'إدارة المالك الرئيسي'}
             </h2>
@@ -1248,6 +1296,7 @@ const AppContent: React.FC = () => {
             <DashboardTab
               orders={orders}
               products={products}
+              categories={categories}
               salesReps={salesReps}
               customers={customers}
               generalSettings={generalSettings}
@@ -1323,6 +1372,7 @@ const AppContent: React.FC = () => {
                 handleResolveOrderEditRequest(orderId, action)
               }
               onDeleteOrder={(orderId) => void handleDeleteOrder(orderId)}
+              onRefreshWorkspace={refreshData}
             />
           )}
 
@@ -1330,6 +1380,7 @@ const AppContent: React.FC = () => {
             <InventoryTab
               products={products}
               categories={categories}
+              oilGrades={oilGrades}
               commissionConfig={commissionConfig}
               generalSettings={generalSettings}
               currentUser={authUser}
@@ -1338,6 +1389,7 @@ const AppContent: React.FC = () => {
               onUpdateProduct={(p) => handleUpdateProduct(p)}
               onArchiveProduct={(id, nextActive, reason) => handleArchiveProduct(id, nextActive, reason)}
               onDeleteProduct={(id, confirmPassword) => handleDeleteProduct(id, confirmPassword)}
+              onRefreshWorkspace={refreshData}
             />
           )}
 
@@ -1346,10 +1398,20 @@ const AppContent: React.FC = () => {
               customers={customers}
               orders={orders}
               products={products}
+              salesReps={salesReps}
               currentUser={authUser}
               onDeleteCustomer={(id) => void handleDeleteCustomer(id)}
               onAddCustomer={(c) => void handleAddCustomer(c)}
               onUpdateCustomer={(id, data) => handleUpdateCustomer(id, data)}
+              onRefreshWorkspace={refreshData}
+            />
+          )}
+
+          {activeTab === 'reports' && (
+            <ReportsCenterTab
+              currentUser={authUser}
+              categories={categories}
+              salesReps={salesReps}
             />
           )}
 
@@ -1386,6 +1448,7 @@ const AppContent: React.FC = () => {
             key={editingOrder ? `${editingOrder.id}-${orderModalMode}` : 'new-order'}
             products={products}
             categories={categories}
+            oilGrades={oilGrades}
             commissionConfig={commissionConfig}
             generalSettings={generalSettings}
             salesReps={salesReps}

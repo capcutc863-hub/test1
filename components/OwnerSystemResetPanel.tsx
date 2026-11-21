@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import type {
   BackupRecord,
+  GranularResetGroupId,
   OwnerSystemOverviewCounts,
   SystemResetPreview,
   SystemResetResult,
@@ -22,6 +23,25 @@ import type {
 import { apiClient, ApiRequestError } from '../src/lib/api';
 
 const FULL_RESET_CONFIRM_PHRASE = 'تأكيد تصفير النظام بالكامل';
+const REMOVE_CATALOG_CONFIRM_PHRASE = 'تأكيد إزالة كتالوج المنتجات';
+
+const GRANULAR_GROUP_META: Array<{
+  key: GranularResetGroupId;
+  label: string;
+  desc: string;
+}> = [
+  { key: 'orders_and_revisions', label: 'الفواتير والمراجعات', desc: 'حذف الفواتير والمراجعات وتصفير عمولات المناديب' },
+  { key: 'stock_movements', label: 'حركات المخزون', desc: 'حذف سجل حركات المستودع التاريخية' },
+  { key: 'external_sourcing', label: 'سجلات التوريد الخارجي', desc: 'حذف فواتير/تكاليف التوريد من الموردين' },
+  { key: 'zero_stock_balances', label: 'تصفير أرصدة المخزون', desc: 'ضبط رصيد كل المنتجات على 0 دون حذف الكتالوج' },
+  { key: 'customers_unlinked', label: 'العملاء غير المرتبطين', desc: 'حذف العملاء الذين لا يملكون فواتير فقط' },
+  { key: 'customers_balances', label: 'أرصدة وتصنيفات العملاء', desc: 'تصفير إجمالي المشتريات دون حذف العملاء' },
+  { key: 'demo_products', label: 'المنتجات التجريبية فقط', desc: 'حذف الأصناف التجريبية غير المرتبطة' },
+  { key: 'unlinked_catalog', label: 'كتالوج المنتجات غير المرتبط', desc: 'حذف الأصناف التي لا ترتبط بأي فاتورة أو حركة' },
+  { key: 'chat_messages', label: 'شات الفريق الداخلي', desc: 'حذف جميع رسائل الشات' },
+  { key: 'price_list_imports', label: 'أرشيف قوائم الأسعار PDF', desc: 'حذف سجل ومرفقات استيراد PDF' },
+  { key: 'operational_logs', label: 'السجلات التشغيلية', desc: 'تنظيف سجلات التدقيق غير الأمنية وسجل تغييرات العمولة' },
+];
 
 interface OwnerSystemResetPanelProps {
   backups: BackupRecord[];
@@ -51,6 +71,10 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
   const [clearPdfImports, setClearPdfImports] = useState(false);
   const [clearOpLogs, setClearOpLogs] = useState(false);
 
+  const [archiveProtectedCatalog, setArchiveProtectedCatalog] = useState(true);
+  const [catalogConfirmPhrase, setCatalogConfirmPhrase] = useState('');
+  const [selectedResetGroups, setSelectedResetGroups] = useState<GranularResetGroupId[]>([]);
+
   const [selectedDemoIds, setSelectedDemoIds] = useState<string[]>([]);
   const [livePreview, setLivePreview] = useState<SystemResetPreview | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -79,6 +103,8 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
       const preview = await apiClient.previewOwnerSystemReset({
         mode,
         customerAction: mode === 'reset_customers' ? custAction : undefined,
+        archiveProtectedCatalog: mode === 'remove_catalog' ? archiveProtectedCatalog : undefined,
+        resetGroups: mode === 'reset_groups' ? selectedResetGroups : undefined,
       });
       setLivePreview(preview);
       if (mode === 'reset_demo_products' && preview.demoProductsSummary) {
@@ -97,7 +123,9 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
     if (
       selectedMode === 'reset_customers' ||
       selectedMode === 'reset_demo_products' ||
-      selectedMode === 'reset_stock'
+      selectedMode === 'reset_stock' ||
+      selectedMode === 'remove_catalog' ||
+      selectedMode === 'reset_groups'
     ) {
       void loadModePreview(selectedMode, customerAction);
     } else {
@@ -127,6 +155,16 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
       !clearOpLogs
     ) {
       onError('يرجى تحديد خيار واحد على الأقل للتنظيف.');
+      return;
+    }
+    if (selectedMode === 'remove_catalog') {
+      if (catalogConfirmPhrase.trim() !== REMOVE_CATALOG_CONFIRM_PHRASE) {
+        onError(`يرجى كتابة عبارة التأكيد المطابقة: "${REMOVE_CATALOG_CONFIRM_PHRASE}"`);
+        return;
+      }
+    }
+    if (selectedMode === 'reset_groups' && selectedResetGroups.length === 0) {
+      onError('يرجى تحديد مجموعة بيانات واحدة على الأقل للتصفير الانتقائي.');
       return;
     }
     if (selectedMode === 'reset_full') {
@@ -171,8 +209,15 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
         clearChatMessages: selectedMode === 'reset_extras' ? clearChat : undefined,
         clearPriceListImports: selectedMode === 'reset_extras' ? clearPdfImports : undefined,
         clearOperationalLogs: selectedMode === 'reset_extras' ? clearOpLogs : undefined,
+        archiveProtectedCatalog: selectedMode === 'remove_catalog' ? archiveProtectedCatalog : undefined,
+        resetGroups: selectedMode === 'reset_groups' ? selectedResetGroups : undefined,
         reason: stockReason.trim() || undefined,
-        confirmationPhrase: selectedMode === 'reset_full' ? fullConfirmPhrase.trim() : undefined,
+        confirmationPhrase:
+          selectedMode === 'reset_full'
+            ? fullConfirmPhrase.trim()
+            : selectedMode === 'remove_catalog'
+              ? catalogConfirmPhrase.trim()
+              : undefined,
         verifiedBackupId: selectedMode === 'reset_full' ? effectiveBackupId : undefined,
       };
       const res = await apiClient.executeOwnerSystemReset(
@@ -182,6 +227,7 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
       setResetResult(res);
       setConfirmModalPreview(null);
       setFullConfirmPhrase('');
+      setCatalogConfirmPhrase('');
       setConfirmPassword('');
       setStockReason('');
       onSuccess(`تم تنفيذ العملية (${selectedMode}) بنجاح وتوثيقها في سجل التدقيق الإداري ✅`);
@@ -189,7 +235,9 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
       if (
         selectedMode === 'reset_customers' ||
         selectedMode === 'reset_demo_products' ||
-        selectedMode === 'reset_stock'
+        selectedMode === 'reset_stock' ||
+        selectedMode === 'remove_catalog' ||
+        selectedMode === 'reset_groups'
       ) {
         await loadModePreview(selectedMode, customerAction);
       }
@@ -229,6 +277,14 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
       title: 'تصفير كامل للنظام',
       desc: 'شديد الخطورة — يتطلب نسخة احتياطية موثقة وعبارة تأكيد',
     },
+    remove_catalog: {
+      title: 'إزالة كتالوج المنتجات بالكامل',
+      desc: 'يحذف كل الأصناف غير المرتبطة بفواتير أو حركات، ويحفظ/يؤرشف الأصناف المرتبطة تاريخياً',
+    },
+    reset_groups: {
+      title: 'تصفير انتقائي مخصص للمجموعات',
+      desc: 'تحديد مجموعات بيانات مستقلة للتصفير دفعة واحدة في معاملة محمية',
+    },
   };
 
   return (
@@ -244,7 +300,7 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
             خيارات التصفير المنضبطة حسب النطاق التشغيلي
           </h4>
           <p className="text-xs font-bold text-red-800">
-            تم الفصل الواضح بين تصفير المبيعات، تصفير كميات المخزون، تنظيف العملاء، وإزالة المنتجات التجريبية فقط — مع تأكيد إجباري ومعاينة قبل التنفيذ.
+            تم الفصل الواضح بين تصفير المبيعات، تصفير كميات المخزون، تنظيف العملاء، إزالة الكتالوج، والتصفير الانتقائي للمجموعات — مع تأكيد إجباري ومعاينة قبل التنفيذ.
           </p>
         </div>
         {systemCounts && (
@@ -256,7 +312,7 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
       </div>
 
       {/* Mode Selection Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {(
           [
             ['reset_sales', '1. تصفير المبيعات والفواتير', 'يحذف الفواتير والمراجعات وعمولات المناديب فقط', <RotateCcw className="w-4 h-4" />],
@@ -265,6 +321,8 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
             ['reset_demo_products', '4. إزالة المنتجات التجريبية فقط', 'يحذف المنتجات التجريبية غير المستخدمة ويحمي الحقيقية', <PackageMinus className="w-4 h-4" />],
             ['reset_extras', '5. تنظيف إضافي مستقل', 'الشات أو دفعات PDF أو السجلات التشغيلية', <Trash2 className="w-4 h-4" />],
             ['reset_full', '6. تصفير كامل للنظام', 'شديد الخطورة — يتطلب نسخة موثقة وعبارة تأكيد', <ShieldAlert className="w-4 h-4" />],
+            ['remove_catalog', '7. إزالة كتالوج المنتجات', 'حذف غير المرتبطين وحماية/أرشفة المرتبطين بفواتير', <PackageX className="w-4 h-4" />],
+            ['reset_groups', '8. تصفير انتقائي للمجموعات', 'تحديد مجموعات بيانات معينة للتنظيف بدقة', <AlertOctagon className="w-4 h-4" />],
           ] as [SystemResetScope['mode'], string, string, React.ReactNode][]
         ).map(([mode, title, desc, icon]) => (
           <button
@@ -276,7 +334,7 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
             }}
             className={`text-right p-3.5 rounded-2xl border transition-all space-y-1.5 ${
               selectedMode === mode
-                ? mode === 'reset_full'
+                ? mode === 'reset_full' || mode === 'remove_catalog'
                   ? 'bg-red-700 text-white border-red-800 shadow-md'
                   : 'bg-[#072F5F] text-white border-[#072F5F] shadow-md'
                 : 'bg-white text-slate-800 border-slate-200 hover:border-red-300'
@@ -574,6 +632,128 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
           </div>
         )}
 
+        {selectedMode === 'remove_catalog' && (
+          <div className="space-y-4 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <h5 className="font-black text-sm text-red-900">
+                إزالة كتالوج المنتجات بالكامل (مع حماية المنتجات المرتبطة بفواتير أو حركات)
+              </h5>
+              {loadingPreview && <RefreshCcw className="w-4 h-4 animate-spin text-red-700" />}
+            </div>
+
+            {livePreview?.catalogRemovalSummary && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl text-center tabular-nums">
+                <div>
+                  <p className="text-[11px] font-bold text-slate-500">إجمالي الكتالوج</p>
+                  <p className="text-base font-black text-slate-900">
+                    {livePreview.catalogRemovalSummary.totalProducts}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold text-red-700">سيُحذف نهائياً (غير مرتبط)</p>
+                  <p className="text-base font-black text-red-700">
+                    {livePreview.catalogRemovalSummary.deletableCount}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold text-emerald-700">محمي (مرتبط بسجلات)</p>
+                  <p className="text-base font-black text-emerald-800">
+                    {livePreview.catalogRemovalSummary.protectedCount}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold text-amber-700">مؤرشف بالفعل من المحمي</p>
+                  <p className="text-base font-black text-amber-800">
+                    {livePreview.catalogRemovalSummary.archivedProtectedCount}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <label className="flex items-start gap-2.5 p-3 bg-amber-50/70 rounded-xl border border-amber-200 cursor-pointer font-bold text-amber-950">
+              <input
+                type="checkbox"
+                checked={archiveProtectedCatalog}
+                onChange={(e) => setArchiveProtectedCatalog(e.target.checked)}
+                className="w-4 h-4 mt-0.5 accent-[#0A468C]"
+              />
+              <div>
+                <p className="font-black">أرشفة الأصناف المحمية (المرتبطة بفواتير/حركات) تلقائياً</p>
+                <p className="text-[11px] text-amber-900">
+                  لن تُحذف الأصناف المرتبطة بفواتير حفاظاً على التقارير التاريخية، ولكن ستُخفى من الفواتير الجديدة عند التفعيل.
+                </p>
+              </div>
+            </label>
+
+            <div>
+              <label className="block text-xs font-black text-red-900 mb-1">
+                اكتب عبارة التأكيد المطابقة: <span className="underline">{REMOVE_CATALOG_CONFIRM_PHRASE}</span>
+              </label>
+              <input
+                type="text"
+                value={catalogConfirmPhrase}
+                onChange={(e) => setCatalogConfirmPhrase(e.target.value)}
+                placeholder={REMOVE_CATALOG_CONFIRM_PHRASE}
+                className="w-full min-h-[44px] px-3.5 py-2 bg-red-50/40 border border-red-300 rounded-xl font-black text-sm"
+              />
+            </div>
+          </div>
+        )}
+
+        {selectedMode === 'reset_groups' && (
+          <div className="space-y-3 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <h5 className="font-black text-sm text-[#072F5F]">
+                تصفير انتقائي مخصص حسب مجموعات البيانات (Granular Reset)
+              </h5>
+              {loadingPreview && <RefreshCcw className="w-4 h-4 animate-spin text-[#0A468C]" />}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+              {GRANULAR_GROUP_META.map((grp) => {
+                const checked = selectedResetGroups.includes(grp.key);
+                const count = livePreview?.groupsSummary?.[grp.key];
+                return (
+                  <label
+                    key={grp.key}
+                    className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                      checked
+                        ? 'bg-blue-50 border-[#0A468C] shadow-xs'
+                        : 'bg-slate-50 border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) =>
+                        setSelectedResetGroups((prev) =>
+                          e.target.checked
+                            ? [...prev, grp.key]
+                            : prev.filter((k) => k !== grp.key)
+                        )
+                      }
+                      className="w-4 h-4 mt-0.5 accent-[#0A468C]"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-black text-slate-900">{grp.label}</span>
+                        {typeof count === 'number' && (
+                          <span className="px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-[10px] font-black text-[#072F5F] tabular-nums">
+                            {count.toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] font-bold text-slate-500 leading-snug mt-0.5">
+                        {grp.desc}
+                      </p>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {selectedMode === 'reset_full' && (
           <div className="space-y-4 text-xs">
             <div className="p-4 bg-red-50 border border-red-300 rounded-2xl space-y-1.5 text-red-950 font-bold">
@@ -648,13 +828,17 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
             executing ||
             loadingPreview ||
             (selectedMode === 'reset_demo_products' && selectedDemoIds.length === 0) ||
+            (selectedMode === 'remove_catalog' &&
+              catalogConfirmPhrase.trim() !== REMOVE_CATALOG_CONFIRM_PHRASE) ||
+            (selectedMode === 'reset_groups' && selectedResetGroups.length === 0) ||
             (selectedMode === 'reset_full' &&
               (!effectiveBackupId || fullConfirmPhrase.trim() !== FULL_RESET_CONFIRM_PHRASE))
           }
           className={`w-full min-h-[48px] px-6 py-2.5 rounded-2xl font-black text-sm flex items-center justify-center gap-2 text-white shadow-md disabled:opacity-50 ${
             selectedMode === 'reset_full' ||
             selectedMode === 'reset_customers' ||
-            selectedMode === 'reset_demo_products'
+            selectedMode === 'reset_demo_products' ||
+            selectedMode === 'remove_catalog'
               ? 'bg-red-700 hover:bg-red-800'
               : 'bg-[#072F5F] hover:bg-[#0A468C]'
           }`}
@@ -763,6 +947,20 @@ export const OwnerSystemResetPanel: React.FC<OwnerSystemResetPanelProps> = ({
               {selectedMode === 'reset_extras' && (
                 <p>
                   • التنظيف المحدد: {[clearChat && 'شات الفريق', clearPdfImports && 'دفعات PDF', clearOpLogs && 'السجلات التشغيلية'].filter(Boolean).join('، ')}.
+                </p>
+              )}
+              {selectedMode === 'remove_catalog' && confirmModalPreview.catalogRemovalSummary && (
+                <>
+                  <p>• سيتم حذف {confirmModalPreview.catalogRemovalSummary.deletableCount} صنف غير مرتبط بأي فاتورة أو حركة مخزون نهائياً.</p>
+                  <p>• سيتم حماية {confirmModalPreview.catalogRemovalSummary.protectedCount} صنف مرتبط بسجلات تاريخية{archiveProtectedCatalog ? ' (مع أرشفتها تلقائياً)' : ''}.</p>
+                </>
+              )}
+              {selectedMode === 'reset_groups' && confirmModalPreview.groupsSummary && (
+                <p>
+                  • المجموعات المحددة للتنظيف:{' '}
+                  {GRANULAR_GROUP_META.filter((g) => selectedResetGroups.includes(g.key))
+                    .map((g) => `${g.label} (${confirmModalPreview.groupsSummary?.[g.key] ?? 0})`)
+                    .join('، ')}.
                 </p>
               )}
               {selectedMode === 'reset_full' && (

@@ -20,23 +20,27 @@ import type {
   User,
 } from '../../types.ts';
 
-export const BACKUP_APP_VERSION = '2.4.0';
-export const BACKUP_SCHEMA_VERSION = 2;
+export const BACKUP_APP_VERSION = '3.1.0';
+export const BACKUP_SCHEMA_VERSION = 4;
 export const BACKUP_CONFIRM_RESTORE_PHRASE = 'استعادة النسخة واستبدال البيانات الحالية';
 export const RESET_FULL_CONFIRM_PHRASE = 'تأكيد تصفير النظام بالكامل';
+export const REMOVE_CATALOG_CONFIRM_PHRASE = 'تأكيد إزالة كتالوج المنتجات';
 
 const OWNER_SENSITIVE_ADVISORY_LOCK_KEY = 98421001;
 const SANDBOX_SCHEMA_REGEX = /^restore_sandbox_[a-z0-9_]+$/;
 
 export const ALL_BACKUP_TABLES = [
   'product_categories',
+  'oil_grades',
   'products',
+  'product_price_history',
   'team_members',
   'sales_reps',
   'customers',
   'orders',
   'order_revisions',
   'stock_movements',
+  'external_sourcing_records',
   'price_list_imports',
   'system_settings',
   'commission_setting_logs',
@@ -49,7 +53,9 @@ export type BackupTableName = (typeof ALL_BACKUP_TABLES)[number];
 
 const TABLE_JSONB_COLUMNS: Record<BackupTableName, string[]> = {
   product_categories: [],
+  oil_grades: ['aliases'],
   products: [],
+  product_price_history: [],
   team_members: [],
   sales_reps: ['category_rates', 'monthly_history'],
   customers: ['return_history'],
@@ -67,7 +73,8 @@ const TABLE_JSONB_COLUMNS: Record<BackupTableName, string[]> = {
   ],
   order_revisions: ['added_items', 'removed_items', 'modified_items'],
   stock_movements: [],
-  price_list_imports: ['column_mapping', 'raw_table_rows', 'parsed_items', 'approval_summary'],
+  external_sourcing_records: [],
+  price_list_imports: ['column_mapping', 'import_config', 'raw_table_rows', 'parsed_items', 'approval_summary'],
   system_settings: ['value'],
   commission_setting_logs: ['previous_value', 'new_value'],
   audit_logs: ['details'],
@@ -88,6 +95,17 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
     'description',
     'created_at',
   ],
+  oil_grades: [
+    'id',
+    'name',
+    'slug',
+    'sort_order',
+    'is_active',
+    'aliases',
+    'description',
+    'created_at',
+    'updated_at',
+  ],
   products: [
     'id',
     'code',
@@ -97,8 +115,12 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
     'description',
     'unit',
     'grade',
+    'grade_id',
+    'base_product_name',
+    'base_product_key',
     'price_per_mg',
     'cost_price',
+    'cost_updated_at',
     'stock',
     'is_active',
     'is_commission_eligible',
@@ -107,6 +129,25 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
     'custom_commission_fixed',
     'created_at',
     'updated_at',
+  ],
+  product_price_history: [
+    'id',
+    'product_id',
+    'product_code',
+    'product_name',
+    'grade',
+    'previous_selling_price',
+    'new_selling_price',
+    'previous_cost_price',
+    'new_cost_price',
+    'unit',
+    'source_type',
+    'import_batch_id',
+    'actor_id',
+    'actor_name',
+    'actor_role',
+    'note',
+    'created_at',
   ],
   team_members: [
     'id',
@@ -148,6 +189,8 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
     'total_spent',
     'classification',
     'last_order_date',
+    'assigned_sales_rep_id',
+    'assigned_sales_rep_name',
     'return_history',
   ],
   orders: [
@@ -223,6 +266,7 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
     'product_id',
     'product_name',
     'grade',
+    'unit',
     'order_id',
     'movement_type',
     'sourcing_source',
@@ -232,10 +276,33 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
     'new_stock',
     'supplier_name',
     'note',
+    'idempotency_key',
     'actor_id',
     'actor_name',
     'actor_role',
     'created_at',
+  ],
+  external_sourcing_records: [
+    'id',
+    'order_id',
+    'item_index',
+    'product_id',
+    'product_code',
+    'product_name',
+    'category_id',
+    'category_name',
+    'unit',
+    'sourcing_type',
+    'supplier_name',
+    'external_qty',
+    'unit_cost',
+    'total_sourcing_cost',
+    'date_secured',
+    'notes',
+    'idempotency_key',
+    'recorded_by_id',
+    'recorded_by_name',
+    'recorded_at',
   ],
   price_list_imports: [
     'id',
@@ -248,6 +315,7 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
     'list_category_id',
     'list_category_name',
     'column_mapping',
+    'import_config',
     'raw_table_rows',
     'uploaded_by_id',
     'uploaded_by_name',
@@ -295,13 +363,16 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
 
 const TABLE_ORDER_BY: Record<BackupTableName, string> = {
   product_categories: 'sort_order ASC, id ASC',
+  oil_grades: 'sort_order ASC, id ASC',
   products: 'id ASC',
+  product_price_history: 'created_at ASC, id ASC',
   team_members: 'id ASC',
   sales_reps: 'id ASC',
   customers: 'id ASC',
   orders: 'created_at ASC, id ASC',
   order_revisions: 'edited_at ASC, id ASC',
   stock_movements: 'created_at ASC, id ASC',
+  external_sourcing_records: 'recorded_at ASC, id ASC',
   price_list_imports: 'uploaded_at ASC, id ASC',
   system_settings: 'key ASC',
   commission_setting_logs: 'created_at ASC, id ASC',
@@ -488,6 +559,7 @@ export async function getOwnerSystemOverviewCounts(): Promise<OwnerSystemOvervie
     customersCount: counts.customers || 0,
     ordersCount: counts.orders || 0,
     stockMovementsCount: counts.stock_movements || 0,
+    externalSourcingCount: counts.external_sourcing_records || 0,
     priceListImportsCount: counts.price_list_imports || 0,
     backupsCount: backupsMeta.length,
     lastVerifiedBackupAt: lastVerified?.createdAt ?? null,
@@ -952,6 +1024,15 @@ export async function inspectBackupZipBuffer(
   for (const tbl of ALL_BACKUP_TABLES) {
     const file = zip.file(`tables/${tbl}.json`);
     if (!file) {
+      if (tbl === 'external_sourcing_records' && schemaVer <= 2) {
+        warnings.push('النسخة الاحتياطية بإصدار v2 ولا تحتوي على جدول external_sourcing_records (سيُعامل كجدول فارغ).');
+        parsedTables[tbl] = [];
+        continue;
+      }
+      if ((tbl === 'oil_grades' || tbl === 'product_price_history') && schemaVer <= 3) {
+        parsedTables[tbl] = [];
+        continue;
+      }
       missingTables.push(tbl);
       continue;
     }
@@ -1133,9 +1214,28 @@ async function extractParsedTablesAndAttachments(
   const zip = await JSZip.loadAsync(zipBuffer);
   const result = {} as Record<BackupTableName, Record<string, unknown>[]>;
 
+  const manifestEntry = zip.file('manifest.json');
+  let schemaVer = BACKUP_SCHEMA_VERSION;
+  if (manifestEntry) {
+    try {
+      const m = JSON.parse(await manifestEntry.async('string')) as Partial<BackupManifest>;
+      if (typeof m.schemaVersion === 'number') schemaVer = m.schemaVersion;
+    } catch {
+      // ignore
+    }
+  }
+
   for (const tbl of ALL_BACKUP_TABLES) {
     const file = zip.file(`tables/${tbl}.json`);
     if (!file) {
+      if (tbl === 'external_sourcing_records' && schemaVer <= 2) {
+        result[tbl] = [];
+        continue;
+      }
+      if ((tbl === 'oil_grades' || tbl === 'product_price_history') && schemaVer <= 3) {
+        result[tbl] = [];
+        continue;
+      }
       throw new OwnerControlError(`الجدول ${tbl} مفقود داخل النسخة الاحتياطية.`, 400);
     }
     const text = await file.async('string');
@@ -1740,6 +1840,97 @@ async function analyzeDemoProductsForReset(client: PoolClient, schemaName: strin
   };
 }
 
+async function analyzeCatalogRemovalForReset(client: PoolClient, schemaName: string) {
+  const [prodRes, ordRes, movRes, extRes] = await Promise.all([
+    client.query<{
+      id: string;
+      code: string;
+      name: string;
+      category_name: string;
+      grade: string;
+      is_active: boolean;
+    }>(
+      `SELECT id, code, name, category_name, grade, is_active FROM "${schemaName}"."products" ORDER BY id`
+    ),
+    client.query<{
+      id: string;
+      items: Array<{ productId?: string; productCode?: string; productName?: string; grade?: string }>;
+    }>(`SELECT id, items FROM "${schemaName}"."orders"`),
+    client.query<{ product_id: string | null }>(
+      `SELECT product_id FROM "${schemaName}"."stock_movements" WHERE product_id IS NOT NULL`
+    ),
+    client.query<{ product_id: string | null }>(
+      `SELECT product_id FROM "${schemaName}"."external_sourcing_records" WHERE product_id IS NOT NULL`
+    ),
+  ]);
+
+  const movementCountByProd = new Map<string, number>();
+  for (const mv of movRes.rows) {
+    if (!mv.product_id) continue;
+    movementCountByProd.set(mv.product_id, (movementCountByProd.get(mv.product_id) || 0) + 1);
+  }
+  for (const ex of extRes.rows) {
+    if (!ex.product_id) continue;
+    movementCountByProd.set(ex.product_id, (movementCountByProd.get(ex.product_id) || 0) + 1);
+  }
+
+  const deletable: Array<{ id: string; code: string; name: string; categoryName: string }> = [];
+  const protectedItems: Array<{
+    id: string;
+    code: string;
+    name: string;
+    categoryName: string;
+    isActive: boolean;
+    ordersCount: number;
+    stockMovementsCount: number;
+  }> = [];
+
+  for (const p of prodRes.rows) {
+    const cleanName = (p.name || '').trim().toLowerCase();
+    const cleanCode = (p.code || '').trim().toLowerCase();
+    const cleanGrade = (p.grade || '').trim();
+    let linkedOrdersCount = 0;
+    for (const ord of ordRes.rows) {
+      const items = Array.isArray(ord.items) ? ord.items : [];
+      const hit = items.some((it) => {
+        if (it.productId && it.productId === p.id) return true;
+        if (it.productCode && cleanCode && it.productCode.trim().toLowerCase() === cleanCode) return true;
+        const itName = (it.productName || '').trim().toLowerCase();
+        if (!itName || itName !== cleanName) return false;
+        const itGrade = (it.grade || '').trim();
+        return !cleanGrade || !itGrade || itGrade === cleanGrade;
+      });
+      if (hit) linkedOrdersCount++;
+    }
+
+    const movCount = movementCountByProd.get(p.id) || 0;
+    if (linkedOrdersCount > 0 || movCount > 0) {
+      protectedItems.push({
+        id: p.id,
+        code: p.code || '',
+        name: p.name,
+        categoryName: p.category_name || '',
+        isActive: p.is_active !== false,
+        ordersCount: linkedOrdersCount,
+        stockMovementsCount: movCount,
+      });
+    } else {
+      deletable.push({
+        id: p.id,
+        code: p.code || '',
+        name: p.name,
+        categoryName: p.category_name || '',
+      });
+    }
+  }
+
+  return {
+    totalProducts: prodRes.rows.length,
+    deletable,
+    protectedItems,
+  };
+}
+
 export async function previewSystemReset(
   scope: SystemResetScope,
   options?: { targetSchema?: string }
@@ -1810,6 +2001,78 @@ export async function previewSystemReset(
         mode: scope.mode,
         ordersCount,
         demoProductsSummary: demo,
+        warnings,
+      };
+    }
+
+    if (scope.mode === 'remove_catalog') {
+      const catInfo = await analyzeCatalogRemovalForReset(client, schemaName);
+      if (catInfo.protectedItems.length > 0) {
+        warnings.push(
+          `توجد ${catInfo.protectedItems.length} منتجات مرتبطة بفواتير أو حركات مخزون، ولن تُحذف حفاظاً على السجلات التاريخية (يمكن أرشفتها تلقائياً عند التفعيل).`
+        );
+      }
+      return {
+        mode: scope.mode,
+        ordersCount,
+        catalogRemovalSummary: {
+          totalProducts: catInfo.totalProducts,
+          deletableCount: catInfo.deletable.length,
+          protectedCount: catInfo.protectedItems.length,
+          archivedProtectedCount: catInfo.protectedItems.filter((p) => !p.isActive).length,
+          deletableSample: catInfo.deletable.slice(0, 20),
+          protectedSample: catInfo.protectedItems.slice(0, 20),
+        },
+        warnings,
+      };
+    }
+
+    if (scope.mode === 'reset_groups') {
+      const [
+        custInfo,
+        demoInfo,
+        catInfo,
+        stockCntRes,
+        movCntRes,
+        extCntRes,
+        chatCnt,
+        pdfCnt,
+        commCnt,
+        audCnt,
+      ] = await Promise.all([
+        analyzeCustomersForReset(client, schemaName),
+        analyzeDemoProductsForReset(client, schemaName),
+        analyzeCatalogRemovalForReset(client, schemaName),
+        client.query<{ cnt: string }>(
+          `SELECT COUNT(*)::text AS cnt FROM "${schemaName}"."products" WHERE stock <> 0`
+        ),
+        client.query<{ cnt: string }>(`SELECT COUNT(*)::text AS cnt FROM "${schemaName}"."stock_movements"`),
+        client.query<{ cnt: string }>(`SELECT COUNT(*)::text AS cnt FROM "${schemaName}"."external_sourcing_records"`),
+        client.query<{ cnt: string }>(`SELECT COUNT(*)::text AS cnt FROM "${schemaName}"."chat_messages"`),
+        client.query<{ cnt: string }>(`SELECT COUNT(*)::text AS cnt FROM "${schemaName}"."price_list_imports"`),
+        client.query<{ cnt: string }>(`SELECT COUNT(*)::text AS cnt FROM "${schemaName}"."commission_setting_logs"`),
+        client.query<{ cnt: string }>(
+          `SELECT COUNT(*)::text AS cnt FROM "${schemaName}"."audit_logs" WHERE action_type NOT IN ('owner_role_claimed','owner_recovery_key_updated','owner_backup_created','owner_restore_live_completed','owner_system_reset')`
+        ),
+      ]);
+
+      return {
+        mode: scope.mode,
+        ordersCount,
+        groupsSummary: {
+          orders_and_revisions: ordersCount,
+          stock_movements: parseInt(movCntRes.rows[0]?.cnt || '0', 10),
+          external_sourcing: parseInt(extCntRes.rows[0]?.cnt || '0', 10),
+          zero_stock_balances: parseInt(stockCntRes.rows[0]?.cnt || '0', 10),
+          customers_unlinked: custInfo.unlinkedRows.length,
+          customers_balances: custInfo.totalCount,
+          demo_products: demoInfo.eligibleToDelete.length,
+          unlinked_catalog: catInfo.deletable.length,
+          chat_messages: parseInt(chatCnt.rows[0]?.cnt || '0', 10),
+          price_list_imports: parseInt(pdfCnt.rows[0]?.cnt || '0', 10),
+          operational_logs:
+            parseInt(commCnt.rows[0]?.cnt || '0', 10) + parseInt(audCnt.rows[0]?.cnt || '0', 10),
+        },
         warnings,
       };
     }
@@ -1902,13 +2165,30 @@ export async function executeSystemReset(
       }
     }
 
+    if (scope.mode === 'remove_catalog') {
+      if ((scope.confirmationPhrase || '').trim() !== REMOVE_CATALOG_CONFIRM_PHRASE) {
+        throw new OwnerControlError(
+          `تتطلب إزالة الكتالوج كتابة عبارة التأكيد المطابقة: "${REMOVE_CATALOG_CONFIRM_PHRASE}".`,
+          400
+        );
+      }
+    }
+
+    if (scope.mode === 'reset_groups') {
+      if (!Array.isArray(scope.resetGroups) || scope.resetGroups.length === 0) {
+        throw new OwnerControlError('يرجى تحديد مجموعة بيانات واحدة على الأقل للتصفير.', 400);
+      }
+    }
+
     let preResetBackupId: string | null = scope.verifiedBackupId || null;
     if (
       isProductionSchema &&
       (scope.mode === 'reset_sales' ||
         scope.mode === 'reset_stock' ||
         scope.mode === 'reset_demo_products' ||
-        scope.mode === 'reset_customers')
+        scope.mode === 'reset_customers' ||
+        scope.mode === 'remove_catalog' ||
+        scope.mode === 'reset_groups')
     ) {
       const safety = await createFullSystemBackup(actor, {
         backupType: 'pre_reset_safety',
@@ -1929,6 +2209,7 @@ export async function executeSystemReset(
 
       if (scope.mode === 'reset_sales') {
         const revDel = await client.query(`DELETE FROM "${schemaName}"."order_revisions"`);
+        const extDel = await client.query(`DELETE FROM "${schemaName}"."external_sourcing_records"`);
         const movDel = await client.query(
           `DELETE FROM "${schemaName}"."stock_movements" WHERE order_id IS NOT NULL OR movement_type IN ('order_deduction','order_delta_deduction','order_delta_restore','order_allocation','external_direct')`
         );
@@ -1942,6 +2223,7 @@ export async function executeSystemReset(
 
         affectedCounts.ordersDeleted = ordDel.rowCount ?? 0;
         affectedCounts.revisionsDeleted = revDel.rowCount ?? 0;
+        affectedCounts.externalSourcingDeleted = extDel.rowCount ?? 0;
         affectedCounts.orderStockMovementsDeleted = movDel.rowCount ?? 0;
         affectedCounts.salesRepsReset = repUpd.rowCount ?? 0;
         affectedCounts.customersTotalsReset = custUpd.rowCount ?? 0;
@@ -2127,8 +2409,147 @@ export async function executeSystemReset(
           affectedCounts.operationalAuditLogsDeleted = audDel.rowCount ?? 0;
         }
         preservedSummary.push('تم الحفاظ على الفواتير والمخزون والعملاء والمستخدمين');
+      } else if (scope.mode === 'remove_catalog') {
+        const catAnalysis = await analyzeCatalogRemovalForReset(client, schemaName);
+        const deletableIds = catAnalysis.deletable.map((p) => p.id);
+        let deletedCount = 0;
+        if (deletableIds.length > 0) {
+          await client.query(
+            `DELETE FROM "${schemaName}"."product_price_history" WHERE product_id = ANY($1::text[])`,
+            [deletableIds]
+          );
+          const delRes = await client.query(
+            `DELETE FROM "${schemaName}"."products" WHERE id = ANY($1::text[])`,
+            [deletableIds]
+          );
+          deletedCount = delRes.rowCount ?? 0;
+        }
+
+        let archivedCount = 0;
+        if (scope.archiveProtectedCatalog && catAnalysis.protectedItems.length > 0) {
+          const toArchiveIds = catAnalysis.protectedItems.filter((p) => p.isActive).map((p) => p.id);
+          if (toArchiveIds.length > 0) {
+            const archRes = await client.query(
+              `UPDATE "${schemaName}"."products" SET is_active = false, updated_at = $1 WHERE id = ANY($2::text[])`,
+              [nowIso, toArchiveIds]
+            );
+            archivedCount = archRes.rowCount ?? 0;
+          }
+        }
+
+        await upsertInitialSeedCompletedSettingTx(client, schemaName, nowIso);
+        affectedCounts.catalogProductsDeleted = deletedCount;
+        affectedCounts.protectedProductsPreserved = catAnalysis.protectedItems.length;
+        affectedCounts.protectedProductsArchived = archivedCount;
+        extraAuditDetails.archiveProtectedCatalog = Boolean(scope.archiveProtectedCatalog);
+
+        if (catAnalysis.protectedItems.length > 0) {
+          warnings.push(
+            `تم الإبقاء على ${catAnalysis.protectedItems.length} صنفاً لارتباطه بفواتير أو حركات مخزون تاريخية${archivedCount > 0 ? ` (وتم أرشفة ${archivedCount} منها)` : ''}.`
+          );
+        }
+        preservedSummary.push(
+          'تم الحفاظ التام على الفواتير التاريخية وحركات المخزون وحساب المالك والمستخدمين والتصنيفات'
+        );
+      } else if (scope.mode === 'reset_groups') {
+        const selected = new Set(scope.resetGroups || []);
+        if (selected.has('orders_and_revisions')) {
+          const revDel = await client.query(`DELETE FROM "${schemaName}"."order_revisions"`);
+          const extDel = await client.query(`DELETE FROM "${schemaName}"."external_sourcing_records"`);
+          const ordDel = await client.query(`DELETE FROM "${schemaName}"."orders"`);
+          await client.query(
+            `UPDATE "${schemaName}"."sales_reps" SET total_commission = 0, pending_commission = 0, orders_count = 0, monthly_history = '[]'::jsonb`
+          );
+          await client.query(
+            `UPDATE "${schemaName}"."customers" SET total_spent = 0, classification = 'عادي', last_order_date = '', return_history = '[]'::jsonb`
+          );
+          affectedCounts.ordersDeleted = ordDel.rowCount ?? 0;
+          affectedCounts.revisionsDeleted = revDel.rowCount ?? 0;
+          affectedCounts.externalSourcingDeleted = extDel.rowCount ?? 0;
+        }
+        if (selected.has('stock_movements')) {
+          const movDel = await client.query(`DELETE FROM "${schemaName}"."stock_movements"`);
+          affectedCounts.stockMovementsDeleted = movDel.rowCount ?? 0;
+        }
+        if (selected.has('external_sourcing') && !selected.has('orders_and_revisions')) {
+          const extDel = await client.query(`DELETE FROM "${schemaName}"."external_sourcing_records"`);
+          affectedCounts.externalSourcingDeleted = extDel.rowCount ?? 0;
+        }
+        if (selected.has('zero_stock_balances')) {
+          const upd = await client.query(
+            `UPDATE "${schemaName}"."products" SET stock = 0, updated_at = $1 WHERE stock <> 0`,
+            [nowIso]
+          );
+          affectedCounts.productsStockZeroed = upd.rowCount ?? 0;
+        }
+        if (selected.has('customers_unlinked')) {
+          const custInfo = await analyzeCustomersForReset(client, schemaName);
+          const ids = custInfo.unlinkedRows.map((c) => c.id);
+          if (ids.length > 0) {
+            const delC = await client.query(
+              `DELETE FROM "${schemaName}"."customers" WHERE id = ANY($1::text[])`,
+              [ids]
+            );
+            affectedCounts.unlinkedCustomersDeleted = delC.rowCount ?? 0;
+          } else {
+            affectedCounts.unlinkedCustomersDeleted = 0;
+          }
+        } else if (selected.has('customers_balances') && !selected.has('orders_and_revisions')) {
+          const updC = await client.query(
+            `UPDATE "${schemaName}"."customers" SET total_spent = 0, classification = 'عادي', last_order_date = '', return_history = '[]'::jsonb`
+          );
+          affectedCounts.customersBalancesReset = updC.rowCount ?? 0;
+        }
+        if (selected.has('demo_products') && !selected.has('unlinked_catalog')) {
+          const demo = await analyzeDemoProductsForReset(client, schemaName);
+          const ids = demo.eligibleToDelete.map((p) => p.id);
+          if (ids.length > 0) {
+            const delP = await client.query(
+              `DELETE FROM "${schemaName}"."products" WHERE id = ANY($1::text[])`,
+              [ids]
+            );
+            affectedCounts.demoProductsDeleted = delP.rowCount ?? 0;
+          } else {
+            affectedCounts.demoProductsDeleted = 0;
+          }
+        }
+        if (selected.has('unlinked_catalog')) {
+          const catInfo = await analyzeCatalogRemovalForReset(client, schemaName);
+          const ids = catInfo.deletable.map((p) => p.id);
+          if (ids.length > 0) {
+            const delP = await client.query(
+              `DELETE FROM "${schemaName}"."products" WHERE id = ANY($1::text[])`,
+              [ids]
+            );
+            affectedCounts.unlinkedCatalogDeleted = delP.rowCount ?? 0;
+          } else {
+            affectedCounts.unlinkedCatalogDeleted = 0;
+          }
+        }
+        if (selected.has('chat_messages')) {
+          const chatDel = await client.query(`DELETE FROM "${schemaName}"."chat_messages"`);
+          affectedCounts.chatMessagesDeleted = chatDel.rowCount ?? 0;
+        }
+        if (selected.has('price_list_imports')) {
+          const pdfDel = await client.query(`DELETE FROM "${schemaName}"."price_list_imports"`);
+          affectedCounts.priceListImportsDeleted = pdfDel.rowCount ?? 0;
+        }
+        if (selected.has('operational_logs')) {
+          const commLogDel = await client.query(`DELETE FROM "${schemaName}"."commission_setting_logs"`);
+          const audDel = await client.query(
+            `DELETE FROM "${schemaName}"."audit_logs" WHERE action_type NOT IN ('owner_role_claimed','owner_recovery_key_updated','owner_backup_created','owner_restore_live_completed','owner_system_reset')`
+          );
+          affectedCounts.commissionLogsDeleted = commLogDel.rowCount ?? 0;
+          affectedCounts.operationalAuditLogsDeleted = audDel.rowCount ?? 0;
+        }
+        await upsertInitialSeedCompletedSettingTx(client, schemaName, nowIso);
+        extraAuditDetails.resetGroups = Array.from(selected);
+        preservedSummary.push(
+          'تم الحفاظ الكامل على حساب المالك الرئيسي والمستخدمين والإعدادات والتصنيفات وسجلات الأمان الحرجة'
+        );
       } else if (scope.mode === 'reset_full') {
         const revDel = await client.query(`DELETE FROM "${schemaName}"."order_revisions"`);
+        const extDel = await client.query(`DELETE FROM "${schemaName}"."external_sourcing_records"`);
         const movDel = await client.query(`DELETE FROM "${schemaName}"."stock_movements"`);
         const ordDel = await client.query(`DELETE FROM "${schemaName}"."orders"`);
         const custDel = await client.query(`DELETE FROM "${schemaName}"."customers"`);
@@ -2146,6 +2567,7 @@ export async function executeSystemReset(
 
         affectedCounts.ordersDeleted = ordDel.rowCount ?? 0;
         affectedCounts.revisionsDeleted = revDel.rowCount ?? 0;
+        affectedCounts.externalSourcingDeleted = extDel.rowCount ?? 0;
         affectedCounts.stockMovementsDeleted = movDel.rowCount ?? 0;
         affectedCounts.customersDeleted = custDel.rowCount ?? 0;
         affectedCounts.chatMessagesDeleted = chatDel.rowCount ?? 0;

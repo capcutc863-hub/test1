@@ -43,6 +43,38 @@ export interface ProductCategory {
   createdAt?: string;
 }
 
+export interface OilGradeRecord {
+  id: string;
+  name: string;
+  slug: string;
+  sortOrder: number;
+  isActive: boolean;
+  aliases: string[];
+  description?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ProductPriceHistoryEntry {
+  id: string;
+  productId: string;
+  productCode?: string | null;
+  productName: string;
+  grade: string;
+  previousSellingPrice: number | null;
+  newSellingPrice: number | null;
+  previousCostPrice: number | null;
+  newCostPrice: number | null;
+  unit: string;
+  sourceType: 'manual' | 'pdf_import' | 'bulk_update' | 'product_created';
+  importBatchId?: string | null;
+  actorId: string;
+  actorName: string;
+  actorRole: UserRole;
+  note?: string | null;
+  createdAt: string;
+}
+
 export interface MonthlyCommission {
   month: string;
   amount: number;
@@ -86,8 +118,12 @@ export interface Product {
   description?: string;
   unit: ProductUnit;
   grade: OilGrade;
+  gradeId?: string | null;
+  baseProductName?: string | null;
+  baseProductKey?: string | null;
   pricePerMg: number; // Selling price per unit (kept as pricePerMg for compatibility)
   costPrice?: number | null;
+  costUpdatedAt?: string | null;
   stock: number;
   isActive: boolean;
   isCommissionEligible: boolean;
@@ -127,6 +163,8 @@ export interface Customer {
   totalSpent: number;
   classification: 'ذهبي' | 'فضي' | 'عادي';
   lastOrderDate: string;
+  assignedSalesRepId?: string | null;
+  assignedSalesRepName?: string | null;
   returnHistory?: CustomerReturnHistoryEntry[];
 }
 
@@ -176,6 +214,9 @@ export interface OrderItem {
   receivedIntoWarehouse?: boolean;
   sourcingUpdatedBy?: string;
   sourcingUpdatedAt?: string;
+  externalUnitCost?: number | null;
+  externalTotalCost?: number | null;
+  supplierDateSecured?: string;
 }
 
 export interface OrderEditRequest {
@@ -363,7 +404,9 @@ export interface StockMovementEntry {
     | 'supplier_receipt'
     | 'order_allocation'
     | 'external_direct'
-    | 'manual_adjustment';
+    | 'manual_adjustment'
+    | 'bulk_set_stock'
+    | 'bulk_add_stock';
   sourcingSource: ItemSourcingSource;
   quantityDelta: number;
   orderQuantityCovered: number;
@@ -371,10 +414,34 @@ export interface StockMovementEntry {
   newStock: number;
   supplierName?: string | null;
   note?: string | null;
+  idempotencyKey?: string | null;
   actorId: string;
   actorName: string;
   actorRole: UserRole;
   createdAt: string;
+}
+
+export interface ExternalSourcingRecord {
+  id: string;
+  orderId: string;
+  itemIndex: number;
+  productId?: string | null;
+  productCode?: string | null;
+  productName: string;
+  categoryId?: string | null;
+  categoryName?: string | null;
+  unit: ProductUnit;
+  sourcingType: 'supplier_receipt' | 'external_direct';
+  supplierName?: string | null;
+  externalQty: number;
+  unitCost?: number | null;
+  totalSourcingCost?: number | null;
+  dateSecured: string;
+  notes?: string | null;
+  idempotencyKey?: string | null;
+  recordedById: string;
+  recordedByName: string;
+  recordedAt: string;
 }
 
 export type OrderDateField =
@@ -507,9 +574,11 @@ export interface CommissionSettingLog {
 
 export type PriceListMatchStatus = 'new' | 'matched' | 'duplicate_in_file' | 'needs_review';
 export type PriceListSinglePriceMeaning = 'selling' | 'cost' | 'unresolved';
+export type PriceListImportActionMode = 'update_and_add' | 'update_only' | 'add_only';
 
 export type PriceListColumnRole =
   | 'ignore'
+  | 'serial'
   | 'code'
   | 'name'
   | 'description'
@@ -519,16 +588,75 @@ export type PriceListColumnRole =
   | 'pricePerKg'
   | 'pricePerGram';
 
+export interface PriceListColumnAssignment {
+  role: PriceListColumnRole;
+  gradeId?: string | null;
+  gradeName?: string | null;
+  unit?: ProductUnit | null;
+}
+
 export interface PriceListColumnMapping {
   hasHeaderRow?: boolean;
   columns: Record<number, PriceListColumnRole>;
+  columnConfigs?: Record<number, PriceListColumnAssignment>;
   oilSourceUnit?: 'auto' | 'كيلوجرام' | 'جرام';
+  sourceUnit?: ProductUnit | 'unconfirmed' | 'auto';
+  targetUnit?: ProductUnit;
+  unitConfirmedByUser?: boolean;
+  conversionFactor?: number;
+  defaultGradeName?: string;
+}
+
+export interface PriceListBatchUnitConfig {
+  detectedSourceUnit: string | null;
+  sourceUnit: ProductUnit | 'unconfirmed';
+  targetUnit: ProductUnit;
+  confirmedByUser: boolean;
+  conversionFactor: number;
+  suggestionReason?: string | null;
+  exampleOriginalPrice?: number | null;
+  exampleConvertedPrice?: number | null;
+}
+
+export interface PriceListImportCounts {
+  expectedSerialCount: number | null;
+  uniqueProductsCount: number;
+  totalVariantsCount: number;
+  rawRowsCount?: number;
+  availableVariantsCount?: number;
+  unavailableVariantsCount?: number;
+  incompletePricesCount?: number;
+  unconfirmedCostsCount?: number;
+  excludedReasons?: string[];
+  hasCountMismatch: boolean;
+  countMismatchReason?: string | null;
+  detectedSerialMin?: number | null;
+  detectedSerialMax?: number | null;
+  missingSerialNumbers?: number[];
+}
+
+export interface PriceListImportConfig {
+  unitConfig: PriceListBatchUnitConfig;
+  counts: PriceListImportCounts;
+  detectedGrades: Array<{
+    name: string;
+    gradeId?: string | null;
+    matched: boolean;
+    columnIndices: number[];
+  }>;
+  isMultiGradeTable: boolean;
 }
 
 export interface PriceListParsedItem {
   rowKey: string;
+  rowIndex?: number;
+  serialNumber?: number | null;
   code: string;
   name: string;
+  baseProductName?: string;
+  baseProductKey?: string;
+  grade?: string;
+  gradeId?: string | null;
   description: string;
   suggestedCategoryId: string;
   suggestedCategoryName: string;
@@ -540,15 +668,20 @@ export interface PriceListParsedItem {
   originalCostPrice?: number | null;
   conversionFactor?: number | null;
   conversionNote?: string | null;
+  isAvailable?: boolean;
+  missingSellPrice?: boolean;
+  missingCostPrice?: boolean;
   ambiguousSinglePrice: number | null;
   singlePriceMeaning: PriceListSinglePriceMeaning;
   matchStatus: PriceListMatchStatus;
-  matchedBy?: 'code' | 'normalized_name' | null;
+  matchedBy?: 'code' | 'normalized_name' | 'name_and_grade' | null;
   matchedProductId?: string | null;
   matchedProductCurrent?: {
     id: string;
     code: string;
     name: string;
+    grade?: string;
+    gradeId?: string | null;
     categoryName: string;
     unit: string;
     pricePerMg: number;
@@ -567,6 +700,7 @@ export interface PriceListParsedItem {
     unit?: boolean;
     sellingPrice?: boolean;
     costPrice?: boolean;
+    grade?: boolean;
   };
 }
 
@@ -580,6 +714,7 @@ export interface PriceListImportRecord {
   listCategoryId?: string | null;
   listCategoryName?: string | null;
   columnMapping?: PriceListColumnMapping | null;
+  importConfig?: PriceListImportConfig | null;
   rawTableRows?: string[][];
   uploadedById: string;
   uploadedByName: string;
@@ -735,6 +870,19 @@ export interface ProductUsageSummary {
   isDemoCandidate: boolean;
 }
 
+export type GranularResetGroupId =
+  | 'orders_and_revisions'
+  | 'stock_movements'
+  | 'external_sourcing'
+  | 'zero_stock_balances'
+  | 'customers_unlinked'
+  | 'customers_balances'
+  | 'demo_products'
+  | 'unlinked_catalog'
+  | 'chat_messages'
+  | 'price_list_imports'
+  | 'operational_logs';
+
 export interface SystemResetScope {
   mode:
     | 'reset_sales'
@@ -742,12 +890,16 @@ export interface SystemResetScope {
     | 'reset_customers'
     | 'reset_demo_products'
     | 'reset_extras'
-    | 'reset_full';
+    | 'reset_full'
+    | 'remove_catalog'
+    | 'reset_groups';
   customerAction?: 'archive_only' | 'reset_balances' | 'delete_unlinked_and_demo' | 'delete_all';
   selectedDemoProductIds?: string[];
   clearChatMessages?: boolean;
   clearPriceListImports?: boolean;
   clearOperationalLogs?: boolean;
+  archiveProtectedCatalog?: boolean;
+  resetGroups?: GranularResetGroupId[];
   reason?: string;
   confirmationPhrase?: string;
   verifiedBackupId?: string;
@@ -787,6 +939,22 @@ export interface SystemResetPreview {
       stockMovementsCount: number;
     }>;
   };
+  catalogRemovalSummary?: {
+    totalProducts: number;
+    deletableCount: number;
+    protectedCount: number;
+    archivedProtectedCount: number;
+    deletableSample: Array<{ id: string; code: string; name: string; categoryName: string }>;
+    protectedSample: Array<{
+      id: string;
+      code: string;
+      name: string;
+      categoryName: string;
+      ordersCount: number;
+      stockMovementsCount: number;
+    }>;
+  };
+  groupsSummary?: Record<GranularResetGroupId, number>;
   extrasSummary?: {
     chatMessagesCount: number;
     priceListImportsCount: number;
@@ -813,9 +981,285 @@ export interface OwnerSystemOverviewCounts {
   customersCount: number;
   ordersCount: number;
   stockMovementsCount: number;
+  externalSourcingCount?: number;
   priceListImportsCount: number;
   backupsCount: number;
   lastVerifiedBackupAt?: string | null;
   lastVerifiedBackupId?: string | null;
 }
+
+// =========================================================================
+// BI Analytics, Unit-Safe Quantities, Sourcing & Reports Types
+// =========================================================================
+
+export type BiPeriodPreset =
+  | 'all'
+  | 'today'
+  | 'yesterday'
+  | 'this_week'
+  | 'this_month'
+  | 'previous_month'
+  | 'last_30_days'
+  | 'last_90_days'
+  | 'this_year'
+  | 'custom';
+
+export interface BiFilterParams {
+  preset?: BiPeriodPreset;
+  dateFrom?: string;
+  dateTo?: string;
+  salesRepId?: string;
+  categoryId?: string;
+  productId?: string;
+  status?: string;
+  customerClassification?: string;
+  stockSource?: 'all' | 'warehouse' | 'external' | 'pending';
+  topLimit?: number;
+}
+
+export interface UnitQuantityTotal {
+  unit: string;
+  quantity: number;
+}
+
+export interface CostCoverageSummary {
+  status: 'complete' | 'partial' | 'unavailable';
+  totalRevenue: number;
+  revenueWithKnownCost: number;
+  coverageRatio: number; // 0..1
+  knownCatalogCost: number;
+  knownExternalSourcingCost: number;
+  knownTotalCost: number;
+  grossProfit: number | null; // null if any cost missing or unavailable
+  partialGrossProfit: number | null; // profit on covered items only
+  marginPercentage: number | null;
+  missingCostItemsCount: number;
+  totalItemsCount: number;
+  noteAr: string;
+}
+
+export interface InventoryValuationSummary {
+  status: 'complete' | 'partial' | 'unavailable';
+  totalActiveProducts: number;
+  productsWithStock: number;
+  valuedProductsCount: number;
+  missingCostStockedProductsCount: number;
+  totalStockValue: number | null; // null if incomplete unless partial explicitly separated
+  partialKnownStockValue: number;
+  coverageRatio: number; // 0..1
+  unitsBreakdown: UnitQuantityTotal[];
+  noteAr: string;
+}
+
+export interface BiBusinessAlert {
+  id: string;
+  severity: 'info' | 'warning' | 'critical' | 'opportunity';
+  title: string;
+  message: string;
+  metric?: string;
+  ruleExplanation: string;
+}
+
+export interface OwnerBiDashboardData {
+  appliedRange: {
+    preset: BiPeriodPreset;
+    dateFrom?: string;
+    dateTo?: string;
+    priorDateFrom?: string;
+    priorDateTo?: string;
+    hasPriorComparison: boolean;
+  };
+  kpis: {
+    totalRevenue: number;
+    deliveredRevenue: number;
+    ordersCount: number;
+    deliveredOrdersCount: number;
+    cancelledOrdersCount: number;
+    returnedOrdersCount: number;
+    averageOrderValue: number;
+    uniqueBuyersCount: number;
+    newBuyersCount: number;
+    repeatBuyersCount: number;
+    earnedCommission: number;
+    pendingCommission: number;
+    unitsSoldByUnit: UnitQuantityTotal[];
+    growth: {
+      revenuePct: number | null;
+      ordersPct: number | null;
+      aovPct: number | null;
+      uniqueBuyersPct: number | null;
+    };
+  };
+  profitSummary: CostCoverageSummary;
+  inventoryValuation: InventoryValuationSummary;
+  revenueTimeSeries: Array<{
+    bucket: string;
+    label: string;
+    revenue: number;
+    deliveredRevenue: number;
+    ordersCount: number;
+  }>;
+  statusBreakdown: Array<{
+    status: OrderStatus;
+    count: number;
+    revenue: number;
+    sharePct: number;
+  }>;
+  categoryBreakdown: Array<{
+    categoryId: string;
+    categoryName: string;
+    ordersCount: number;
+    revenue: number;
+    sharePct: number;
+    unitsByUnit: UnitQuantityTotal[];
+  }>;
+  topProducts: Array<{
+    productId: string;
+    productCode: string;
+    productName: string;
+    categoryName: string;
+    unit: string;
+    ordersCount: number;
+    quantitySold: number;
+    revenue: number;
+    currentStock: number;
+    pendingSourcingQty: number;
+    externalSuppliedQty: number;
+    stockingOpportunity: boolean;
+    stockingOpportunityReason?: string;
+  }>;
+  sourcingSummary: {
+    warehouseUnitsByUnit: UnitQuantityTotal[];
+    externalUnitsByUnit: UnitQuantityTotal[];
+    pendingUnitsByUnit: UnitQuantityTotal[];
+    pendingItemsCount: number;
+    pendingOrdersCount: number;
+    knownExternalCostTotal: number;
+    externalRecordsCount: number;
+    missingCostExternalRecordsCount: number;
+  };
+  alerts: BiBusinessAlert[];
+}
+
+export interface SalesRepAnalyticsRow {
+  salesRepId: string;
+  salesRepName: string;
+  ordersCount: number;
+  deliveredOrdersCount: number;
+  cancelledOrReturnedCount: number;
+  totalRevenue: number;
+  deliveredRevenue: number;
+  averageOrderValue: number;
+  uniqueCustomersCount: number;
+  repeatCustomersCount: number;
+  earnedCommission: number;
+  pendingCommission: number;
+  baseCommissionRate: number;
+  categoryRates: Record<string, number>;
+  unitsByUnit: UnitQuantityTotal[];
+  categoryBreakdown: Array<{
+    categoryId: string;
+    categoryName: string;
+    revenue: number;
+    unitsByUnit: UnitQuantityTotal[];
+  }>;
+}
+
+export type CustomerRepeatFilter =
+  | 'all'
+  | 'once'
+  | '2_plus'
+  | '3_plus'
+  | '5_plus'
+  | 'custom_min'
+  | 'increased_frequency'
+  | 'declined_frequency'
+  | 'inactive';
+
+export interface CustomerAnalyticsRow {
+  customerId: string;
+  customerName: string;
+  phone: string;
+  address?: string;
+  classification: string;
+  assignedSalesRepId?: string | null;
+  assignedSalesRepName?: string | null;
+  ordersCount: number;
+  periodOrdersCount: number;
+  previousPeriodOrdersCount: number;
+  totalSpent: number;
+  periodSpent: number;
+  averageOrderValue: number;
+  firstOrderDate: string;
+  lastOrderDate: string;
+  daysSinceLastOrder: number | null;
+  isDormant: boolean;
+  frequencyTrend: 'increased' | 'declined' | 'stable' | 'new';
+  unitsByUnit: UnitQuantityTotal[];
+  primaryRepName?: string;
+}
+
+export interface ReorderRecommendationRow {
+  productId: string;
+  code: string;
+  name: string;
+  categoryId: string;
+  categoryName: string;
+  unit: string;
+  currentStock: number;
+  lookbackUnitsSold: number;
+  avgDailyDemand: number;
+  externalSuppliedInLookback: number;
+  pendingProcurementQty: number;
+  leadTimeDays: number;
+  safetyDays: number;
+  recommendedTargetStock: number;
+  suggestedReorderQty: number;
+  daysOfCoverRemaining: number | null;
+  priority: 'urgent' | 'soon' | 'watch';
+  reasonAr: string;
+}
+
+export type UnifiedReportType =
+  | 'sales'
+  | 'sales_reps'
+  | 'commissions'
+  | 'categories'
+  | 'products'
+  | 'customers'
+  | 'repeat_customers'
+  | 'inventory_valuation'
+  | 'stock_movements'
+  | 'external_sourcing'
+  | 'invoice_status'
+  | 'operations_performance';
+
+export interface BulkPreviewItem {
+  id: string;
+  label: string;
+  subLabel?: string;
+  eligible: boolean;
+  reason?: string;
+  previewBefore?: string;
+  previewAfter?: string;
+}
+
+export interface BulkPreviewResult {
+  action: string;
+  totalSelected: number;
+  eligibleCount: number;
+  excludedCount: number;
+  items: BulkPreviewItem[];
+  warnings: string[];
+}
+
+export interface BulkExecuteResult {
+  action: string;
+  executedCount: number;
+  skippedCount: number;
+  idempotentReplay?: boolean;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
 

@@ -5,6 +5,7 @@ import {
   chatMessages,
   commissionSettingLogs,
   customers,
+  externalSourcingRecords,
   orderRevisions,
   orders,
   products,
@@ -16,6 +17,7 @@ import {
 import {
   ensureCatalogAndSettingsSeeded,
   getAllCategories,
+  getAllOilGrades,
   getCommissionConfig,
   getGeneralSystemSettings,
   getOwnerAccountCount,
@@ -35,9 +37,11 @@ import {
   DEFAULT_COMMISSION_CONFIG,
   resolveCategoryDefaultCommissionEligible,
 } from '../lib/commission-utils.ts';
-import { classifyProductName } from '../lib/product-classifier.ts';
+import { classifyProductName, normalizeArabicForSearch } from '../lib/product-classifier.ts';
+import { roundStockNumber } from '../lib/unit-conversion.ts';
 import {
   computeOrderStats,
+  formatCairoYmd,
   hasOrderPendingProcurement,
   normalizeRevisionStatus,
   resolveCairoDateRange,
@@ -48,6 +52,7 @@ import type {
   CommissionMode,
   Customer,
   CustomerReturnHistoryEntry,
+  ExternalSourcingRecord,
   ItemProcurementStatus,
   ItemSourcingSource,
   OilGrade,
@@ -489,8 +494,55 @@ function mapCustomerRow(c: typeof customers.$inferSelect): Customer {
     totalSpent: c.totalSpent,
     classification: c.classification as Customer['classification'],
     lastOrderDate: c.lastOrderDate,
+    assignedSalesRepId: c.assignedSalesRepId ?? null,
+    assignedSalesRepName: c.assignedSalesRepName ?? null,
     returnHistory: c.returnHistory ?? [],
   };
+}
+
+export function canUserAccessCustomerRecord(
+  user: User,
+  customer: Pick<Customer, 'name' | 'phone' | 'assignedSalesRepId'>,
+  ordersList: Array<Pick<Order, 'customerName' | 'customerPhone' | 'salesRepId'>>
+): boolean {
+  if (
+    user.role === 'owner' ||
+    user.role === 'admin' ||
+    user.role === 'supervisor' ||
+    Boolean(user.canManageOrderStatus) ||
+    Boolean(user.canConfirmDelivery)
+  ) {
+    return true;
+  }
+  if (!user.salesRepId) return false;
+  if (customer.assignedSalesRepId) {
+    return customer.assignedSalesRepId === user.salesRepId;
+  }
+  const cleanName = customer.name.trim().toLowerCase();
+  const cleanPhone = (customer.phone || '').trim();
+  const matchingOrders = ordersList.filter(
+    (o) =>
+      (cleanName && o.customerName.trim().toLowerCase() === cleanName) ||
+      (Boolean(cleanPhone) && (o.customerPhone || '').trim() === cleanPhone)
+  );
+  return matchingOrders.length > 0 && matchingOrders.every((o) => o.salesRepId === user.salesRepId);
+}
+
+export function getVisibleCustomersForUser(
+  user: User,
+  allCustomers: Customer[],
+  allOrders: Order[]
+): Customer[] {
+  if (
+    user.role === 'owner' ||
+    user.role === 'admin' ||
+    user.role === 'supervisor' ||
+    Boolean(user.canManageOrderStatus) ||
+    Boolean(user.canConfirmDelivery)
+  ) {
+    return allCustomers;
+  }
+  return allCustomers.filter((c) => canUserAccessCustomerRecord(user, c, allOrders));
 }
 
 function mapRevisionRow(r: typeof orderRevisions.$inferSelect): OrderRevisionEntry {
@@ -589,6 +641,7 @@ export async function getAllWorkspaceData() {
       revisionRows,
       chatRows,
       categories,
+      oilGradesList,
       commissionConfig,
       generalSettings,
       bootstrapStatus,
@@ -602,6 +655,7 @@ export async function getAllWorkspaceData() {
         db.select().from(orderRevisions).orderBy(asc(orderRevisions.toVersion)),
         db.select().from(chatMessages),
         getAllCategories(),
+        getAllOilGrades(),
         getCommissionConfig(),
         getGeneralSystemSettings(),
         getOwnerBootstrapStatus(),
@@ -620,6 +674,7 @@ export async function getAllWorkspaceData() {
       users: userRows.map(mapTeamMemberRow),
       products: productRows.map(mapProductRow),
       categories,
+      oilGrades: oilGradesList,
       commissionConfig,
       generalSettings,
       hasOwnerAccount: bootstrapStatus.hasOwnerAccount,
@@ -661,6 +716,7 @@ export async function getWorkspaceDataForUser(user: User) {
     users: isStrictManager ? full.users : [user],
     products: full.products,
     categories: full.categories,
+    oilGrades: full.oilGrades,
     commissionConfig: full.commissionConfig,
     generalSettings: full.generalSettings,
     hasOwnerAccount: full.hasOwnerAccount,
@@ -671,7 +727,7 @@ export async function getWorkspaceDataForUser(user: User) {
         : full.salesReps.filter(
             (r) => r.userId === user.id || (Boolean(user.salesRepId) && r.id === user.salesRepId)
           ),
-    customers: full.customers,
+    customers: getVisibleCustomersForUser(user, full.customers, full.orders),
     orders: hasOperationsOrderAccess
       ? full.orders
       : full.orders.filter(
@@ -726,6 +782,13 @@ function normalizeOrderItem(item: OrderItem, preserveAddToInventory = false): Or
     ...(typeof item.receivedIntoWarehouse === 'boolean'
       ? { receivedIntoWarehouse: item.receivedIntoWarehouse }
       : {}),
+    ...(typeof item.externalUnitCost === 'number' && Number.isFinite(item.externalUnitCost)
+      ? { externalUnitCost: item.externalUnitCost }
+      : {}),
+    ...(typeof item.externalTotalCost === 'number' && Number.isFinite(item.externalTotalCost)
+      ? { externalTotalCost: item.externalTotalCost }
+      : {}),
+    ...(item.supplierDateSecured ? { supplierDateSecured: item.supplierDateSecured } : {}),
     ...(item.sourcingUpdatedBy ? { sourcingUpdatedBy: item.sourcingUpdatedBy } : {}),
     ...(item.sourcingUpdatedAt ? { sourcingUpdatedAt: item.sourcingUpdatedAt } : {}),
   };
@@ -825,6 +888,7 @@ async function writeStockMovementTx(
     productId?: string | null;
     productName: string;
     grade: OilGrade;
+    unit?: string | null;
     orderId?: string | null;
     movementType: StockMovementEntry['movementType'];
     sourcingSource: ItemSourcingSource;
@@ -834,6 +898,7 @@ async function writeStockMovementTx(
     newStock: number;
     supplierName?: string | null;
     note?: string | null;
+    idempotencyKey?: string | null;
     actor: User;
     createdAt?: string;
   }
@@ -844,6 +909,7 @@ async function writeStockMovementTx(
     productId: params.productId ?? null,
     productName: params.productName,
     grade: params.grade,
+    unit: params.unit ?? null,
     orderId: params.orderId ?? null,
     movementType: params.movementType,
     sourcingSource: params.sourcingSource,
@@ -853,6 +919,7 @@ async function writeStockMovementTx(
     newStock: params.newStock,
     supplierName: params.supplierName ?? null,
     note: params.note ?? null,
+    idempotencyKey: params.idempotencyKey ?? null,
     actorId: params.actor.id,
     actorName: params.actor.name,
     actorRole: params.actor.role,
@@ -876,7 +943,7 @@ function aggregateItemsByKey(items: OrderItem[]) {
   for (const item of items) {
     const cleanName = item.productName.trim();
     if (!cleanName) continue;
-    const key = makeItemKey(cleanName, item.grade);
+    const key = makeItemKey(cleanName, item.grade, item.productCode, item.productId);
     const qty = Number(item.quantity);
     const price = Number(item.price);
     const existing = map.get(key);
@@ -1041,11 +1108,15 @@ export async function createOrderRecord(
     const productsCatalog = allProductRows.map(mapProductRow);
 
     for (const item of cleanedItems) {
-      if (item.productId) {
-        const catalogProd = productsCatalog.find((p) => p.id === item.productId);
-        if (catalogProd && catalogProd.isActive === false) {
-          throw new Error(`لا يمكن إضافة الصنف المؤرشف "${catalogProd.name}" إلى فاتورة جديدة.`);
-        }
+      const catalogProd = findMatchingProduct(
+        allProductRows,
+        item.productName,
+        item.grade || '',
+        item.productId,
+        item.productCode
+      );
+      if (catalogProd && catalogProd.isActive === false) {
+        throw new Error(`لا يمكن إضافة الصنف المؤرشف "${catalogProd.name}" إلى فاتورة جديدة.`);
       }
     }
 
@@ -1160,7 +1231,17 @@ export async function createOrderRecord(
           totalSpent: 0,
           classification: 'عادي',
           lastOrderDate: '',
+          assignedSalesRepId: newOrder.salesRepId || null,
+          assignedSalesRepName: newOrder.salesRepName || null,
         });
+      } else if (!matchedCustomer.assignedSalesRepId && newOrder.salesRepId) {
+        await tx
+          .update(customers)
+          .set({
+            assignedSalesRepId: newOrder.salesRepId,
+            assignedSalesRepName: newOrder.salesRepName || null,
+          })
+          .where(eq(customers.id, matchedCustomer.id));
       }
 
       await writeAuditLogTx(tx, {
@@ -1289,10 +1370,12 @@ export async function confirmOrderRecord(orderId: string, actorUser: User): Prom
           procurementStatus = 'fulfilled';
 
           const curStock = prod ? (stockMap.get(prod.id) ?? prod.stock) : 0;
+          const itemUnit = prod?.unit || rawItem.unit || 'وحدة';
           await writeStockMovementTx(tx, {
             productId: prod?.id ?? null,
             productName: rawItem.productName,
             grade: rawItem.grade,
+            unit: itemUnit,
             orderId,
             movementType: 'external_direct',
             sourcingSource: resolvedSource,
@@ -1305,6 +1388,39 @@ export async function confirmOrderRecord(orderId: string, actorUser: User): Prom
             actor: actorUser,
             createdAt: nowIso,
           });
+          if (externalSuppliedQty > 0) {
+            const unitCost =
+              typeof rawItem.externalUnitCost === 'number' && Number.isFinite(rawItem.externalUnitCost) && rawItem.externalUnitCost >= 0
+                ? rawItem.externalUnitCost
+                : null;
+            const totalSourcingCost =
+              typeof rawItem.externalTotalCost === 'number' && Number.isFinite(rawItem.externalTotalCost) && rawItem.externalTotalCost >= 0
+                ? rawItem.externalTotalCost
+                : unitCost !== null
+                  ? unitCost * externalSuppliedQty
+                  : null;
+            await tx.insert(externalSourcingRecords).values({
+              id: `ext-${Date.now()}-${idx}-${Math.floor(Math.random() * 10000)}`,
+              orderId,
+              itemIndex: idx,
+              productId: prod?.id ?? rawItem.productId ?? null,
+              productCode: prod?.code ?? rawItem.productCode ?? null,
+              productName: rawItem.productName,
+              categoryId: prod?.categoryId ?? rawItem.categoryId ?? null,
+              categoryName: prod?.categoryName ?? rawItem.categoryName ?? null,
+              unit: itemUnit,
+              sourcingType: 'external_direct',
+              supplierName: rawItem.supplierName ?? null,
+              externalQty: externalSuppliedQty,
+              unitCost,
+              totalSourcingCost,
+              dateSecured: rawItem.supplierDateSecured || formatCairoYmd(new Date(nowIso)),
+              notes: rawItem.sourcingNotes ?? null,
+              recordedById: actorUser.id,
+              recordedByName: actorUser.name,
+              recordedAt: nowIso,
+            });
+          }
         } else if (
           requestedSource === 'توفير من المورد' ||
           requestedSource === 'بانتظار التوفير'
@@ -1320,12 +1436,13 @@ export async function confirmOrderRecord(orderId: string, actorUser: User): Prom
           pendingQty = Math.max(0, qty - take);
 
           if (prod && take > 0) {
-            const nextStock = curStock - take;
+            const nextStock = roundStockNumber(curStock - take);
             stockMap.set(prod.id, nextStock);
             await writeStockMovementTx(tx, {
               productId: prod.id,
               productName: rawItem.productName,
               grade: rawItem.grade,
+              unit: prod.unit || rawItem.unit || null,
               orderId,
               movementType: 'order_deduction',
               sourcingSource: 'من المخزون الحالي',
@@ -1335,7 +1452,7 @@ export async function confirmOrderRecord(orderId: string, actorUser: User): Prom
               newStock: nextStock,
               note:
                 pendingQty > 0
-                  ? `خصم المتاح (${take}) ووضع المتبقي (${pendingQty}) بانتظار التوفير`
+                  ? `خصم المتاح (${take} ${prod.unit || rawItem.unit || ''}) ووضع المتبقي (${pendingQty}) بانتظار التوفير`
                   : 'خصم كامل الكمية من المخزون عند تأكيد العميل',
               actor: actorUser,
               createdAt: nowIso,
@@ -1773,15 +1890,22 @@ export async function updateOrderRecord(
           const targetTotalQty = newTotalQtyByKey.get(key) ?? 0;
           if (pool.warePool > targetTotalQty) {
             const restoreQty = pool.warePool - targetTotalQty;
-            const prod = findMatchingProduct(allProducts, pool.productName, pool.grade);
+            const prod = findMatchingProduct(
+              allProducts,
+              pool.productName,
+              pool.grade,
+              key.startsWith('id:') ? key.slice(3) : undefined,
+              key.startsWith('code:') ? key.slice(5) : undefined
+            );
             if (prod && restoreQty > 0) {
               const curStock = stockMap.get(prod.id) ?? prod.stock;
-              const nextStock = curStock + restoreQty;
+              const nextStock = roundStockNumber(curStock + restoreQty);
               stockMap.set(prod.id, nextStock);
               await writeStockMovementTx(tx, {
                 productId: prod.id,
                 productName: pool.productName,
                 grade: pool.grade,
+                unit: prod.unit || null,
                 orderId,
                 movementType: 'order_delta_restore',
                 sourcingSource: 'من المخزون الحالي',
@@ -1886,6 +2010,7 @@ export async function updateOrderRecord(
                 productId: prod?.id ?? null,
                 productName: newItem.productName,
                 grade: newItem.grade,
+                unit: prod?.unit || newItem.unit || null,
                 orderId,
                 movementType: 'external_direct',
                 sourcingSource: resolvedSource,
@@ -1908,13 +2033,14 @@ export async function updateOrderRecord(
               const curStock = prod ? Math.max(0, stockMap.get(prod.id) ?? prod.stock) : 0;
               const takeNew = prod ? Math.min(curStock, remainingNeed) : 0;
               if (prod && takeNew > 0) {
-                const nextStock = curStock - takeNew;
+                const nextStock = roundStockNumber(curStock - takeNew);
                 stockMap.set(prod.id, nextStock);
                 warehouseDeductedQty += takeNew;
                 await writeStockMovementTx(tx, {
                   productId: prod.id,
                   productName: newItem.productName,
                   grade: newItem.grade,
+                  unit: prod.unit || newItem.unit || null,
                   orderId,
                   movementType: 'order_delta_deduction',
                   sourcingSource: 'من المخزون الحالي',
@@ -3526,14 +3652,20 @@ export async function deleteOrderRecord(orderId: string) {
       if (wasConfirmed) {
         const allProducts = await tx.select().from(products);
         for (const item of orderToDelete.items) {
-          const prod = findMatchingProduct(allProducts, item.productName, item.grade);
+          const prod = findMatchingProduct(
+            allProducts,
+            item.productName,
+            item.grade,
+            item.productId,
+            item.productCode
+          );
           const { ware } = getEffectiveLegacyWarehouseQty(item, prod);
           if (prod && ware > 0) {
             await tx
               .update(products)
-              .set({ stock: prod.stock + ware })
+              .set({ stock: roundStockNumber(prod.stock + ware) })
               .where(eq(products.id, prod.id));
-            prod.stock += ware;
+            prod.stock = roundStockNumber(prod.stock + ware);
           }
         }
 
@@ -3576,11 +3708,16 @@ export async function deleteOrderRecord(orderId: string) {
   }
 }
 
-export async function createCustomerRecord(customerData: {
-  name: string;
-  phone: string;
-  address?: string;
-}): Promise<Customer> {
+export async function createCustomerRecord(
+  customerData: {
+    name: string;
+    phone: string;
+    address?: string;
+    assignedSalesRepId?: string | null;
+    assignedSalesRepName?: string | null;
+  },
+  actor?: User
+): Promise<Customer> {
   try {
     const cleanName = (customerData.name || '').trim();
     if (!cleanName) {
@@ -3589,14 +3726,33 @@ export async function createCustomerRecord(customerData: {
     const cleanPhone = (customerData.phone || '').trim();
     const cleanAddress = customerData.address?.trim() || undefined;
 
+    let assignedSalesRepId = customerData.assignedSalesRepId?.trim() || null;
+    let assignedSalesRepName = customerData.assignedSalesRepName?.trim() || null;
+
+    if (actor?.role === 'sales' && actor.salesRepId) {
+      assignedSalesRepId = actor.salesRepId;
+      assignedSalesRepName = actor.name;
+    } else if (assignedSalesRepId && !assignedSalesRepName) {
+      const repRows = await db
+        .select()
+        .from(salesReps)
+        .where(eq(salesReps.id, assignedSalesRepId))
+        .limit(1);
+      if (repRows.length > 0) {
+        assignedSalesRepName = repRows[0].name;
+      }
+    }
+
     const newCust: Customer = {
-      id: `c-${Date.now()}`,
+      id: `c-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       name: cleanName,
       phone: cleanPhone,
       address: cleanAddress,
       totalSpent: 0,
       classification: 'عادي',
       lastOrderDate: '',
+      assignedSalesRepId,
+      assignedSalesRepName,
     };
 
     await db.insert(customers).values({
@@ -3607,6 +3763,8 @@ export async function createCustomerRecord(customerData: {
       totalSpent: 0,
       classification: 'عادي',
       lastOrderDate: '',
+      assignedSalesRepId,
+      assignedSalesRepName,
     });
 
     return newCust;
@@ -3621,7 +3779,12 @@ export async function createCustomerRecord(customerData: {
 
 export async function updateCustomerRecord(
   customerId: string,
-  patch: { name: string; phone?: string; address?: string | null },
+  patch: {
+    name: string;
+    phone?: string;
+    address?: string | null;
+    assignedSalesRepId?: string | null;
+  },
   actor?: User
 ): Promise<{ customer: Customer; linkedOrdersSynced: number }> {
   try {
@@ -3666,6 +3829,27 @@ export async function updateCustomerRecord(
           (Boolean(prevPhoneNorm) && (o.customerPhone || '').trim() === prevPhoneNorm)
       );
 
+      let nextAssignedRepId = prev.assignedSalesRepId ?? null;
+      let nextAssignedRepName = prev.assignedSalesRepName ?? null;
+      if (patch.assignedSalesRepId !== undefined) {
+        const requestedRepId = (patch.assignedSalesRepId || '').trim() || null;
+        if (!requestedRepId) {
+          nextAssignedRepId = null;
+          nextAssignedRepName = null;
+        } else {
+          const repRows = await tx
+            .select()
+            .from(salesReps)
+            .where(eq(salesReps.id, requestedRepId))
+            .limit(1);
+          if (repRows.length === 0) {
+            throw new Error('مندوب المبيعات المحدد غير موجود.');
+          }
+          nextAssignedRepId = repRows[0].id;
+          nextAssignedRepName = repRows[0].name;
+        }
+      }
+
       const finalAddress = nextAddress !== undefined ? nextAddress : prev.address;
       await tx
         .update(customers)
@@ -3673,6 +3857,8 @@ export async function updateCustomerRecord(
           name: nextName,
           phone: nextPhone,
           address: finalAddress,
+          assignedSalesRepId: nextAssignedRepId,
+          assignedSalesRepName: nextAssignedRepName,
         })
         .where(eq(customers.id, customerId));
 
@@ -3711,11 +3897,13 @@ export async function updateCustomerRecord(
               name: prev.name,
               phone: prev.phone,
               address: prev.address,
+              assignedSalesRepId: prev.assignedSalesRepId,
             },
             updated: {
               name: nextName,
               phone: nextPhone,
               address: finalAddress,
+              assignedSalesRepId: nextAssignedRepId,
             },
             linkedOrdersCount: linkedOrders.length,
             linkedOrdersSynced,
@@ -3725,7 +3913,16 @@ export async function updateCustomerRecord(
       }
 
       return {
-        customer: mapCustomerRow(updatedRow || { ...prev, name: nextName, phone: nextPhone, address: finalAddress }),
+        customer: mapCustomerRow(
+          updatedRow || {
+            ...prev,
+            name: nextName,
+            phone: nextPhone,
+            address: finalAddress,
+            assignedSalesRepId: nextAssignedRepId,
+            assignedSalesRepName: nextAssignedRepName,
+          }
+        ),
         linkedOrdersSynced,
       };
     });
@@ -3845,6 +4042,7 @@ export async function getProductUsageInfo(
       .where(eq(stockMovements.productId, productId)),
   ]);
 
+  const cleanProdCode = (prod.code || '').trim().toLowerCase();
   const cleanProdName = prod.name.trim().toLowerCase();
   const cleanProdGrade = (prod.grade || '').trim();
   const matchedOrderIds: string[] = [];
@@ -3853,6 +4051,9 @@ export async function getProductUsageInfo(
     const items = Array.isArray(ord.items) ? ord.items : [];
     const matches = items.some((item) => {
       if (item.productId) return item.productId === prod.id;
+      if (cleanProdCode && item.productCode && item.productCode.trim().toLowerCase() === cleanProdCode) {
+        return true;
+      }
       const itemName = (item.productName || '').trim().toLowerCase();
       if (!itemName || itemName !== cleanProdName) return false;
       const itemGrade = (item.grade || '').trim();
@@ -4056,6 +4257,7 @@ export async function createProductRecord(
         : 'inherit_rep';
 
       const nowIso = new Date().toISOString();
+      const baseName = productData.baseProductName?.trim() || cleanName;
       const rowToInsert: typeof products.$inferInsert = {
         id: `p-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         code: cleanCode,
@@ -4064,13 +4266,20 @@ export async function createProductRecord(
         categoryName: chosenCat.name,
         description: productData.description?.trim() || null,
         unit: productData.unit?.trim() || chosenCat.defaultUnit || 'mg',
-        grade: productData.grade ?? (chosenCat.slug === 'oils' ? 'عالي (Code A)' : ''),
+        grade: productData.grade ?? (chosenCat.slug === 'oils' ? 'عالي' : ''),
+        gradeId: productData.gradeId ?? null,
+        baseProductName: baseName,
+        baseProductKey: productData.baseProductKey?.trim() || normalizeArabicForSearch(baseName),
         pricePerMg: Number(productData.pricePerMg) || 0,
         costPrice:
           typeof productData.costPrice === 'number' && Number.isFinite(productData.costPrice)
             ? productData.costPrice
             : null,
-        stock: Math.max(0, Math.round(Number(productData.stock) || 0)),
+        costUpdatedAt:
+          typeof productData.costPrice === 'number' && Number.isFinite(productData.costPrice)
+            ? nowIso
+            : null,
+        stock: Math.max(0, roundStockNumber(Number(productData.stock) || 0)),
         isActive: productData.isActive !== false,
         isCommissionEligible,
         commissionMode:
@@ -4190,11 +4399,13 @@ export async function updateProductRecord(updatedProduct: Partial<Product> & { i
         : prev.customCommissionFixed;
 
       const nowIso = new Date().toISOString();
+      const nextName = updatedProduct.name?.trim() || prev.name;
+      const nextBaseName = updatedProduct.baseProductName?.trim() || prev.baseProductName || nextName;
       await tx
         .update(products)
         .set({
           code: cleanCode || prev.code,
-          name: updatedProduct.name?.trim() || prev.name,
+          name: nextName,
           categoryId: chosenCat?.id || prev.categoryId || 'cat-oils',
           categoryName: chosenCat?.name || prev.categoryName || 'الزيوت العطرية',
           description:
@@ -4203,15 +4414,23 @@ export async function updateProductRecord(updatedProduct: Partial<Product> & { i
               : prev.description,
           unit: updatedProduct.unit?.trim() || prev.unit || 'mg',
           grade: updatedProduct.grade !== undefined ? updatedProduct.grade : prev.grade,
+          gradeId: updatedProduct.gradeId !== undefined ? updatedProduct.gradeId : prev.gradeId,
+          baseProductName: nextBaseName,
+          baseProductKey:
+            updatedProduct.baseProductKey?.trim() || normalizeArabicForSearch(nextBaseName),
           pricePerMg:
             typeof updatedProduct.pricePerMg === 'number'
               ? updatedProduct.pricePerMg
               : prev.pricePerMg,
           costPrice:
             updatedProduct.costPrice !== undefined ? updatedProduct.costPrice : prev.costPrice,
+          costUpdatedAt:
+            updatedProduct.costPrice !== undefined && updatedProduct.costPrice !== prev.costPrice
+              ? nowIso
+              : prev.costUpdatedAt,
           stock:
             typeof updatedProduct.stock === 'number'
-              ? Math.max(0, Math.round(updatedProduct.stock))
+              ? Math.max(0, roundStockNumber(updatedProduct.stock))
               : prev.stock,
           isActive:
             typeof updatedProduct.isActive === 'boolean' ? updatedProduct.isActive : prev.isActive,
@@ -4578,6 +4797,10 @@ export interface ManageItemSourcingPayload {
   quantity?: number;
   supplierName?: string;
   notes?: string;
+  unitCost?: number | null;
+  totalSourcingCost?: number | null;
+  dateSecured?: string;
+  idempotencyKey?: string;
 }
 
 export async function manageOrderItemSourcingRecord(
@@ -4605,6 +4828,30 @@ export async function manageOrderItemSourcingRecord(
         throw new Error('يرجى تأكيد الفاتورة من العميل أولاً قبل تنفيذ عمليات التوفير المخزني.');
       }
 
+      const cleanIdempotencyKey = payload.idempotencyKey?.trim() || null;
+      if (cleanIdempotencyKey) {
+        const [dupMove, dupExt] = await Promise.all([
+          tx
+            .select({ id: stockMovements.id })
+            .from(stockMovements)
+            .where(eq(stockMovements.idempotencyKey, cleanIdempotencyKey))
+            .limit(1),
+          tx
+            .select({ id: externalSourcingRecords.id })
+            .from(externalSourcingRecords)
+            .where(eq(externalSourcingRecords.idempotencyKey, cleanIdempotencyKey))
+            .limit(1),
+        ]);
+        if (dupMove.length > 0 || dupExt.length > 0) {
+          const revRows = await tx
+            .select()
+            .from(orderRevisions)
+            .where(eq(orderRevisions.orderId, orderId))
+            .orderBy(asc(orderRevisions.toVersion));
+          return mapOrderRow(prevOrder, revRows.map(mapRevisionRow));
+        }
+      }
+
       const items = [...prevOrder.items];
       const idx = Number(payload.itemIndex);
       if (!Number.isInteger(idx) || idx < 0 || idx >= items.length) {
@@ -4613,10 +4860,15 @@ export async function manageOrderItemSourcingRecord(
 
       const allProducts = await tx.select().from(products);
       const rawTarget = normalizeOrderItem(items[idx], false);
-      let prod = findMatchingProduct(allProducts, rawTarget.productName, rawTarget.grade);
+      let prod = findMatchingProduct(
+        allProducts,
+        rawTarget.productName,
+        rawTarget.grade,
+        rawTarget.productId,
+        rawTarget.productCode
+      );
       const eff = getEffectiveLegacyWarehouseQty(rawTarget, prod);
 
-      const qty = Math.max(0, Number(rawTarget.quantity));
       let ware = eff.ware;
       let ext = eff.ext;
       let pend = eff.pend;
@@ -4626,7 +4878,19 @@ export async function manageOrderItemSourcingRecord(
       const supplierName = payload.supplierName?.trim() || rawTarget.supplierName;
       const sourcingNotes = payload.notes?.trim() || rawTarget.sourcingNotes;
       const nowIso = new Date().toISOString();
+      const dateSecured = payload.dateSecured?.trim() || formatCairoYmd(new Date(nowIso));
+      const unitLabel = prod?.unit || rawTarget.unit || 'وحدة';
       let auditNote = '';
+      let resolvedUnitCost: number | null =
+        typeof payload.unitCost === 'number' && Number.isFinite(payload.unitCost) && payload.unitCost >= 0
+          ? payload.unitCost
+          : null;
+      let resolvedTotalCost: number | null =
+        typeof payload.totalSourcingCost === 'number' &&
+        Number.isFinite(payload.totalSourcingCost) &&
+        payload.totalSourcingCost >= 0
+          ? payload.totalSourcingCost
+          : null;
 
       if (payload.action === 'set_source') {
         if (!payload.sourcingSource || !VALID_SOURCING_SOURCES.includes(payload.sourcingSource)) {
@@ -4677,12 +4941,13 @@ export async function manageOrderItemSourcingRecord(
         }
 
         const stockBeforeReceipt = Math.max(0, prod.stock);
-        const stockAfterReceipt = stockBeforeReceipt + receivedQty;
+        const stockAfterReceipt = roundStockNumber(stockBeforeReceipt + receivedQty);
 
         await writeStockMovementTx(tx, {
           productId: prod.id,
           productName: rawTarget.productName,
           grade: rawTarget.grade,
+          unit: prod.unit || unitLabel,
           orderId,
           movementType: 'supplier_receipt',
           sourcingSource: 'توفير من المورد',
@@ -4692,12 +4957,13 @@ export async function manageOrderItemSourcingRecord(
           newStock: stockAfterReceipt,
           supplierName: supplierName ?? null,
           note: sourcingNotes || `استلام من المورد لتغطية الطلب ${orderId}`,
+          idempotencyKey: cleanIdempotencyKey ? `${cleanIdempotencyKey}:receipt` : null,
           actor: actorUser,
           createdAt: nowIso,
         });
 
         const allocQty = Math.min(stockAfterReceipt, pend);
-        const finalStock = stockAfterReceipt - allocQty;
+        const finalStock = roundStockNumber(stockAfterReceipt - allocQty);
 
         await tx.update(products).set({ stock: finalStock }).where(eq(products.id, prod.id));
 
@@ -4705,6 +4971,7 @@ export async function manageOrderItemSourcingRecord(
           productId: prod.id,
           productName: rawTarget.productName,
           grade: rawTarget.grade,
+          unit: prod.unit || unitLabel,
           orderId,
           movementType: 'order_allocation',
           sourcingSource: 'توفير من المورد',
@@ -4714,17 +4981,47 @@ export async function manageOrderItemSourcingRecord(
           newStock: finalStock,
           supplierName: supplierName ?? null,
           note: sourcingNotes || `تخصيص الكمية المستلمة من المورد لصالح الطلب ${orderId}`,
+          idempotencyKey: cleanIdempotencyKey ? `${cleanIdempotencyKey}:alloc` : null,
           actor: actorUser,
           createdAt: nowIso,
         });
 
-        ware += allocQty;
-        pend = Math.max(0, pend - allocQty);
+        if (resolvedTotalCost === null && resolvedUnitCost !== null) {
+          resolvedTotalCost = Math.round(resolvedUnitCost * receivedQty * 100) / 100;
+        } else if (resolvedUnitCost === null && resolvedTotalCost !== null && receivedQty > 0) {
+          resolvedUnitCost = Math.round((resolvedTotalCost / receivedQty) * 10000) / 10000;
+        }
+
+        await tx.insert(externalSourcingRecords).values({
+          id: `ext-${Date.now()}-${idx}-${Math.floor(Math.random() * 10000)}`,
+          orderId,
+          itemIndex: idx,
+          productId: prod.id,
+          productCode: prod.code ?? rawTarget.productCode ?? null,
+          productName: rawTarget.productName,
+          categoryId: prod.categoryId ?? rawTarget.categoryId ?? null,
+          categoryName: prod.categoryName ?? rawTarget.categoryName ?? null,
+          unit: prod.unit || unitLabel,
+          sourcingType: 'supplier_receipt',
+          supplierName: supplierName ?? null,
+          externalQty: receivedQty,
+          unitCost: resolvedUnitCost,
+          totalSourcingCost: resolvedTotalCost,
+          dateSecured,
+          notes: sourcingNotes ?? null,
+          idempotencyKey: cleanIdempotencyKey,
+          recordedById: actorUser.id,
+          recordedByName: actorUser.name,
+          recordedAt: nowIso,
+        });
+
+        ware = roundStockNumber(ware + allocQty);
+        pend = Math.max(0, roundStockNumber(pend - allocQty));
         resolvedSource = 'توفير من المورد';
         receivedIntoWarehouse = true;
-        auditNote = `استلام ${receivedQty.toLocaleString()} mg من المورد${
+        auditNote = `استلام ${receivedQty.toLocaleString()} ${unitLabel} من المورد${
           supplierName ? ` (${supplierName})` : ''
-        } وتخصيص ${allocQty.toLocaleString()} mg لصالح "${rawTarget.productName}"`;
+        } وتخصيص ${allocQty.toLocaleString()} ${unitLabel} لصالح "${rawTarget.productName}"`;
       } else if (payload.action === 'fulfill_external_direct') {
         if (pend <= 0) {
           throw new Error('لا توجد كمية متبقية بانتظار التوفير لهذا الصنف.');
@@ -4740,6 +5037,7 @@ export async function manageOrderItemSourcingRecord(
           productId: prod?.id ?? null,
           productName: rawTarget.productName,
           grade: rawTarget.grade,
+          unit: unitLabel,
           orderId,
           movementType: 'external_direct',
           sourcingSource: 'توفير خارجي دون إدخاله إلى المخزن',
@@ -4749,14 +5047,44 @@ export async function manageOrderItemSourcingRecord(
           newStock: currentProdStock,
           supplierName: supplierName ?? null,
           note: sourcingNotes || 'توفير خارجي مباشر للعميل دون إدخال للمخزن',
+          idempotencyKey: cleanIdempotencyKey,
           actor: actorUser,
           createdAt: nowIso,
         });
 
-        ext += coverQty;
-        pend = Math.max(0, pend - coverQty);
+        if (resolvedTotalCost === null && resolvedUnitCost !== null) {
+          resolvedTotalCost = Math.round(resolvedUnitCost * coverQty * 100) / 100;
+        } else if (resolvedUnitCost === null && resolvedTotalCost !== null && coverQty > 0) {
+          resolvedUnitCost = Math.round((resolvedTotalCost / coverQty) * 10000) / 10000;
+        }
+
+        await tx.insert(externalSourcingRecords).values({
+          id: `ext-${Date.now()}-${idx}-${Math.floor(Math.random() * 10000)}`,
+          orderId,
+          itemIndex: idx,
+          productId: prod?.id ?? rawTarget.productId ?? null,
+          productCode: prod?.code ?? rawTarget.productCode ?? null,
+          productName: rawTarget.productName,
+          categoryId: prod?.categoryId ?? rawTarget.categoryId ?? null,
+          categoryName: prod?.categoryName ?? rawTarget.categoryName ?? null,
+          unit: unitLabel,
+          sourcingType: 'external_direct',
+          supplierName: supplierName ?? null,
+          externalQty: coverQty,
+          unitCost: resolvedUnitCost,
+          totalSourcingCost: resolvedTotalCost,
+          dateSecured,
+          notes: sourcingNotes ?? null,
+          idempotencyKey: cleanIdempotencyKey,
+          recordedById: actorUser.id,
+          recordedByName: actorUser.name,
+          recordedAt: nowIso,
+        });
+
+        ext = roundStockNumber(ext + coverQty);
+        pend = Math.max(0, roundStockNumber(pend - coverQty));
         resolvedSource = 'توفير خارجي دون إدخاله إلى المخزن';
-        auditNote = `تأكيد توفير خارجي مباشر بمقدار ${coverQty.toLocaleString()} mg لصنف "${rawTarget.productName}" بدون التأثير على المخزن`;
+        auditNote = `تأكيد توفير خارجي مباشر بمقدار ${coverQty.toLocaleString()} ${unitLabel} لصنف "${rawTarget.productName}" بدون التأثير على المخزن`;
       } else if (payload.action === 'allocate_from_warehouse') {
         if (pend <= 0) {
           throw new Error('لا توجد كمية متبقية بانتظار التوفير لهذا الصنف.');
@@ -4772,13 +5100,14 @@ export async function manageOrderItemSourcingRecord(
         }
 
         const prevStock = prod.stock;
-        const nextStock = prevStock - allocQty;
+        const nextStock = roundStockNumber(prevStock - allocQty);
         await tx.update(products).set({ stock: nextStock }).where(eq(products.id, prod.id));
 
         await writeStockMovementTx(tx, {
           productId: prod.id,
           productName: rawTarget.productName,
           grade: rawTarget.grade,
+          unit: prod.unit || unitLabel,
           orderId,
           movementType: 'order_allocation',
           sourcingSource: 'من المخزون الحالي',
@@ -4787,14 +5116,15 @@ export async function manageOrderItemSourcingRecord(
           previousStock: prevStock,
           newStock: nextStock,
           note: sourcingNotes || `سحب الكمية المتوفرة بالمخزن لصالح الطلب ${orderId}`,
+          idempotencyKey: cleanIdempotencyKey,
           actor: actorUser,
           createdAt: nowIso,
         });
 
-        ware += allocQty;
-        pend = Math.max(0, pend - allocQty);
+        ware = roundStockNumber(ware + allocQty);
+        pend = Math.max(0, roundStockNumber(pend - allocQty));
         if (pend === 0 && ext === 0) resolvedSource = 'من المخزون الحالي';
-        auditNote = `سحب ${allocQty.toLocaleString()} mg من المخزون الحالي لصنف "${rawTarget.productName}"`;
+        auditNote = `سحب ${allocQty.toLocaleString()} ${unitLabel} من المخزون الحالي لصنف "${rawTarget.productName}"`;
       } else {
         throw new Error('إجراء التوفير المطلوب غير معروف.');
       }
@@ -4802,6 +5132,8 @@ export async function manageOrderItemSourcingRecord(
       const procurementStatus: ItemProcurementStatus = pend > 0 ? 'pending' : 'fulfilled';
       items[idx] = {
         ...rawTarget,
+        ...(prod ? { productId: prod.id, productCode: prod.code || rawTarget.productCode } : {}),
+        unit: prod?.unit || rawTarget.unit,
         sourcingSource: resolvedSource,
         warehouseDeductedQty: ware,
         externalSuppliedQty: ext,
@@ -4809,6 +5141,11 @@ export async function manageOrderItemSourcingRecord(
         procurementStatus,
         ...(supplierName ? { supplierName } : {}),
         ...(sourcingNotes ? { sourcingNotes } : {}),
+        ...(resolvedUnitCost !== null ? { externalUnitCost: resolvedUnitCost } : {}),
+        ...(resolvedTotalCost !== null ? { externalTotalCost: resolvedTotalCost } : {}),
+        ...(payload.action === 'receive_into_warehouse' || payload.action === 'fulfill_external_direct'
+          ? { supplierDateSecured: dateSecured }
+          : {}),
         receivedIntoWarehouse,
         sourcingUpdatedBy: actorUser.name,
         sourcingUpdatedAt: nowIso,
@@ -4843,12 +5180,15 @@ export async function manageOrderItemSourcingRecord(
           itemIndex: idx,
           productName: rawTarget.productName,
           grade: rawTarget.grade,
+          unit: unitLabel,
           action: payload.action,
           sourcingSource: resolvedSource,
           warehouseDeductedQty: ware,
           externalSuppliedQty: ext,
           pendingQty: pend,
           procurementStatus,
+          unitCost: resolvedUnitCost,
+          totalSourcingCost: resolvedTotalCost,
         },
         createdAt: nowIso,
       });
@@ -4880,6 +5220,179 @@ export async function manageOrderItemSourcingRecord(
   }
 }
 
+export async function listExternalSourcingRecords(filters?: {
+  orderId?: string;
+  productId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}): Promise<ExternalSourcingRecord[]> {
+  const rows = await db
+    .select()
+    .from(externalSourcingRecords)
+    .orderBy(desc(externalSourcingRecords.recordedAt));
+
+  return rows
+    .filter((r) => {
+      if (filters?.orderId && r.orderId !== filters.orderId) return false;
+      if (filters?.productId && r.productId !== filters.productId) return false;
+      if (filters?.dateFrom && r.dateSecured < filters.dateFrom) return false;
+      if (filters?.dateTo && r.dateSecured > filters.dateTo) return false;
+      return true;
+    })
+    .map((r) => ({
+      id: r.id,
+      orderId: r.orderId,
+      itemIndex: r.itemIndex,
+      productId: r.productId ?? null,
+      productCode: r.productCode ?? null,
+      productName: r.productName,
+      categoryId: r.categoryId ?? null,
+      categoryName: r.categoryName ?? null,
+      unit: r.unit,
+      sourcingType: r.sourcingType as ExternalSourcingRecord['sourcingType'],
+      supplierName: r.supplierName ?? null,
+      externalQty: r.externalQty,
+      unitCost: r.unitCost ?? null,
+      totalSourcingCost: r.totalSourcingCost ?? null,
+      dateSecured: r.dateSecured,
+      notes: r.notes ?? null,
+      recordedById: r.recordedById,
+      recordedByName: r.recordedByName,
+      recordedAt: r.recordedAt,
+    }));
+}
+
+export async function updateExternalSourcingCostRecord(
+  recordId: string,
+  patch: {
+    supplierName?: string | null;
+    unitCost?: number | null;
+    totalSourcingCost?: number | null;
+    dateSecured?: string;
+    notes?: string | null;
+  },
+  actor: User
+): Promise<ExternalSourcingRecord> {
+  return await db.transaction(async (tx) => {
+    const existingRows = await tx
+      .select()
+      .from(externalSourcingRecords)
+      .where(eq(externalSourcingRecords.id, recordId))
+      .limit(1);
+    if (existingRows.length === 0) {
+      throw new Error('سجل التوفير الخارجي المطلوب غير موجود.');
+    }
+    const prev = existingRows[0];
+
+    let nextUnitCost: number | null =
+      patch.unitCost !== undefined
+        ? typeof patch.unitCost === 'number' && Number.isFinite(patch.unitCost) && patch.unitCost >= 0
+          ? patch.unitCost
+          : null
+        : prev.unitCost;
+    let nextTotalCost: number | null =
+      patch.totalSourcingCost !== undefined
+        ? typeof patch.totalSourcingCost === 'number' &&
+          Number.isFinite(patch.totalSourcingCost) &&
+          patch.totalSourcingCost >= 0
+          ? patch.totalSourcingCost
+          : null
+        : prev.totalSourcingCost;
+
+    if (patch.totalSourcingCost === undefined && patch.unitCost !== undefined) {
+      nextTotalCost =
+        nextUnitCost !== null ? Math.round(nextUnitCost * prev.externalQty * 100) / 100 : null;
+    } else if (patch.unitCost === undefined && patch.totalSourcingCost !== undefined) {
+      nextUnitCost =
+        nextTotalCost !== null && prev.externalQty > 0
+          ? Math.round((nextTotalCost / prev.externalQty) * 10000) / 10000
+          : null;
+    }
+
+    const nextSupplierName =
+      patch.supplierName !== undefined ? patch.supplierName?.trim() || null : prev.supplierName;
+    const nextDateSecured = patch.dateSecured?.trim() || prev.dateSecured;
+    const nextNotes = patch.notes !== undefined ? patch.notes?.trim() || null : prev.notes;
+
+    await tx
+      .update(externalSourcingRecords)
+      .set({
+        supplierName: nextSupplierName,
+        unitCost: nextUnitCost,
+        totalSourcingCost: nextTotalCost,
+        dateSecured: nextDateSecured,
+        notes: nextNotes,
+      })
+      .where(eq(externalSourcingRecords.id, recordId));
+
+    // Sync cost back into the linked order item if present
+    const orderRows = await tx
+      .select()
+      .from(orders)
+      .where(eq(orders.id, prev.orderId))
+      .limit(1);
+    if (orderRows.length > 0 && Array.isArray(orderRows[0].items)) {
+      const nextItems = [...orderRows[0].items];
+      const targetItem = nextItems[prev.itemIndex];
+      if (targetItem) {
+        nextItems[prev.itemIndex] = {
+          ...targetItem,
+          ...(nextSupplierName ? { supplierName: nextSupplierName } : {}),
+          externalUnitCost: nextUnitCost,
+          externalTotalCost: nextTotalCost,
+          supplierDateSecured: nextDateSecured,
+        };
+        await tx
+          .update(orders)
+          .set({ items: nextItems })
+          .where(eq(orders.id, prev.orderId));
+      }
+    }
+
+    await writeAuditLogTx(tx, {
+      orderId: prev.orderId,
+      actionType: 'external_sourcing_cost_updated',
+      actor,
+      details: {
+        recordId,
+        productName: prev.productName,
+        previousUnitCost: prev.unitCost,
+        newUnitCost: nextUnitCost,
+        previousTotalCost: prev.totalSourcingCost,
+        newTotalCost: nextTotalCost,
+      },
+      createdAt: new Date().toISOString(),
+    });
+
+    const [updated] = await tx
+      .select()
+      .from(externalSourcingRecords)
+      .where(eq(externalSourcingRecords.id, recordId))
+      .limit(1);
+    return {
+      id: updated.id,
+      orderId: updated.orderId,
+      itemIndex: updated.itemIndex,
+      productId: updated.productId ?? null,
+      productCode: updated.productCode ?? null,
+      productName: updated.productName,
+      categoryId: updated.categoryId ?? null,
+      categoryName: updated.categoryName ?? null,
+      unit: updated.unit,
+      sourcingType: updated.sourcingType as ExternalSourcingRecord['sourcingType'],
+      supplierName: updated.supplierName ?? null,
+      externalQty: updated.externalQty,
+      unitCost: updated.unitCost ?? null,
+      totalSourcingCost: updated.totalSourcingCost ?? null,
+      dateSecured: updated.dateSecured,
+      notes: updated.notes ?? null,
+      recordedById: updated.recordedById,
+      recordedByName: updated.recordedByName,
+      recordedAt: updated.recordedAt,
+    };
+  });
+}
+
 export async function getStockMovementsForUser(
   user: User,
   orderId?: string
@@ -4899,18 +5412,19 @@ export async function getStockMovementsForUser(
           .from(stockMovements)
           .where(eq(stockMovements.orderId, orderId))
           .orderBy(desc(stockMovements.createdAt))
-          .limit(200)
+          .limit(300)
       : await db
           .select()
           .from(stockMovements)
           .orderBy(desc(stockMovements.createdAt))
-          .limit(200);
+          .limit(300);
 
     return rows.map((r) => ({
       id: r.id,
       productId: r.productId,
       productName: r.productName,
       grade: r.grade as OilGrade,
+      unit: r.unit ?? null,
       orderId: r.orderId,
       movementType: r.movementType as StockMovementEntry['movementType'],
       sourcingSource: r.sourcingSource as ItemSourcingSource,
@@ -4920,6 +5434,7 @@ export async function getStockMovementsForUser(
       newStock: r.newStock,
       supplierName: r.supplierName,
       note: r.note,
+      idempotencyKey: r.idempotencyKey ?? null,
       actorId: r.actorId,
       actorName: r.actorName,
       actorRole: r.actorRole as UserRole,

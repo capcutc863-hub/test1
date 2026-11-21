@@ -4,11 +4,18 @@ import type {
   BackupInspectionReport,
   BackupManifest,
   BackupRecord,
+  BiFilterParams,
+  BulkExecuteResult,
+  BulkPreviewResult,
   ChatMessage,
   CommissionConfig,
   CommissionSettingLog,
   Customer,
+  CustomerAnalyticsRow,
+  CustomerRepeatFilter,
+  ExternalSourcingRecord,
   ItemSourcingSource,
+  OilGradeRecord,
   Order,
   OrderDateField,
   OrderDatePreset,
@@ -16,6 +23,7 @@ import type {
   OrderReturnPrimaryReason,
   OrdersQueryStats,
   OrderStatus,
+  OwnerBiDashboardData,
   OwnerCommissionAnalytics,
   OwnerSystemOverviewCounts,
   PriceListColumnMapping,
@@ -24,13 +32,17 @@ import type {
   Product,
   ProductCategory,
   ProductUsageSummary,
+  ReorderRecommendationRow,
   RestoreExecutionReport,
   SalesRep,
+  SalesRepAnalyticsRow,
   StockMovementEntry,
   SystemGeneralSettings,
   SystemResetPreview,
   SystemResetResult,
   SystemResetScope,
+  UnifiedReportType,
+  UnitQuantityTotal,
   User,
 } from '../../types.ts';
 
@@ -98,6 +110,25 @@ export interface ManageItemSourcingPayload {
   quantity?: number;
   supplierName?: string;
   notes?: string;
+  unitCost?: number | null;
+  totalSourcingCost?: number | null;
+  dateSecured?: string;
+  idempotencyKey?: string;
+}
+
+export interface UnifiedReportClientPayload {
+  reportType: UnifiedReportType;
+  titleAr: string;
+  subtitleAr: string;
+  appliedFilterSummary: string;
+  summaryCards: Array<{ label: string; value: string }>;
+  columns: Array<{
+    key: string;
+    label: string;
+    format?: 'text' | 'number' | 'currency' | 'date' | 'percent';
+  }>;
+  rows: Array<Record<string, string | number | null>>;
+  unitTotals?: UnitQuantityTotal[];
 }
 
 export interface OrderStatusTransitionPayload {
@@ -131,6 +162,7 @@ export interface WorkspacePayload {
   users: User[];
   products: Product[];
   categories: ProductCategory[];
+  oilGrades?: OilGradeRecord[];
   commissionConfig: CommissionConfig;
   generalSettings: SystemGeneralSettings;
   hasOwnerAccount: boolean;
@@ -143,6 +175,7 @@ export interface WorkspacePayload {
 
 export interface OwnerOverviewPayload {
   categories: ProductCategory[];
+  oilGrades?: OilGradeRecord[];
   commissionConfig: CommissionConfig;
   generalSettings: SystemGeneralSettings;
   commissionLogs: CommissionSettingLog[];
@@ -367,7 +400,12 @@ export const apiClient = {
       method: 'DELETE',
     }),
 
-  createCustomer: (customerData: { name: string; phone: string; address?: string }) =>
+  createCustomer: (customerData: {
+    name: string;
+    phone: string;
+    address?: string;
+    assignedSalesRepId?: string | null;
+  }) =>
     apiRequest<Customer>('/api/customers', {
       method: 'POST',
       body: JSON.stringify(customerData),
@@ -375,7 +413,12 @@ export const apiClient = {
 
   updateCustomer: (
     customerId: string,
-    customerData: { name: string; phone?: string; address?: string }
+    customerData: {
+      name: string;
+      phone?: string;
+      address?: string;
+      assignedSalesRepId?: string | null;
+    }
   ) =>
     apiRequest<{ customer: Customer; linkedOrdersSynced: number }>(
       `/api/customers/${encodeURIComponent(customerId)}`,
@@ -709,11 +752,50 @@ export const apiClient = {
       }
     ),
 
+  getOilGrades: () => apiRequest<OilGradeRecord[]>('/api/oil-grades'),
+
+  createOilGrade: (payload: {
+    name: string;
+    slug?: string;
+    sortOrder?: number;
+    isActive?: boolean;
+    aliases?: string[];
+    description?: string | null;
+  }) =>
+    apiRequest<OilGradeRecord>('/api/oil-grades', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  updateOilGrade: (grade: Partial<OilGradeRecord> & { id: string }) =>
+    apiRequest<OilGradeRecord>(`/api/oil-grades/${encodeURIComponent(grade.id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(grade),
+    }),
+
   cancelPriceListImport: (importId: string) =>
     apiRequest<{ ok: boolean }>(
       `/api/price-lists/${encodeURIComponent(importId)}/cancel`,
       {
         method: 'POST',
+      }
+    ),
+
+  deletePriceListImport: (importId: string, confirmPassword?: string) =>
+    apiRequest<{ deletedCount: number; deletedIds: string[]; deletedFiles: string[] }>(
+      `/api/price-lists/${encodeURIComponent(importId)}`,
+      {
+        method: 'DELETE',
+        body: confirmPassword ? JSON.stringify({ confirmPassword }) : undefined,
+      }
+    ),
+
+  deletePriceListImportsBulk: (ids: string[], confirmPassword?: string) =>
+    apiRequest<{ deletedCount: number; deletedIds: string[]; deletedFiles: string[] }>(
+      '/api/price-lists/archive/delete',
+      {
+        method: 'POST',
+        body: JSON.stringify({ ids, confirmPassword }),
       }
     ),
 
@@ -735,5 +817,205 @@ export const apiClient = {
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
+
+  // ===================================================================
+  // BI Analytics, Reports, Real Excel Export & Bulk Operations
+  // ===================================================================
+
+  getOwnerBiDashboard: (filters: BiFilterParams = {}) => {
+    const sp = new URLSearchParams();
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') sp.set(k, String(v));
+    });
+    const qs = sp.toString();
+    return apiRequest<OwnerBiDashboardData>(`/api/analytics/owner-bi${qs ? `?${qs}` : ''}`);
+  },
+
+  getSalesRepAnalytics: (filters: BiFilterParams = {}) => {
+    const sp = new URLSearchParams();
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') sp.set(k, String(v));
+    });
+    const qs = sp.toString();
+    return apiRequest<{
+      appliedRange: OwnerBiDashboardData['appliedRange'];
+      reps: SalesRepAnalyticsRow[];
+    }>(`/api/analytics/sales-reps${qs ? `?${qs}` : ''}`);
+  },
+
+  getCustomerAnalytics: (
+    filters: BiFilterParams & {
+      repeatFilter?: CustomerRepeatFilter;
+      customMinOrders?: number;
+      dormancyDays?: number;
+      search?: string;
+      sortBy?: string;
+      sortDir?: 'asc' | 'desc';
+    } = {}
+  ) => {
+    const sp = new URLSearchParams();
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') sp.set(k, String(v));
+    });
+    const qs = sp.toString();
+    return apiRequest<{
+      appliedRange: OwnerBiDashboardData['appliedRange'];
+      dormancyDays: number;
+      summary: {
+        totalCustomers: number;
+        repeatCustomersCount: number;
+        oneTimeBuyersCount: number;
+        dormantCustomersCount: number;
+        totalPeriodRevenue: number;
+      };
+      customers: CustomerAnalyticsRow[];
+    }>(`/api/analytics/customers${qs ? `?${qs}` : ''}`);
+  },
+
+  getReorderRecommendations: (params: {
+    lookbackDays?: number;
+    leadTimeDays?: number;
+    safetyDays?: number;
+    categoryId?: string;
+  } = {}) => {
+    const sp = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') sp.set(k, String(v));
+    });
+    const qs = sp.toString();
+    return apiRequest<{
+      lookbackDays: number;
+      leadTimeDays: number;
+      safetyDays: number;
+      recommendations: ReorderRecommendationRow[];
+    }>(`/api/analytics/reorder-recommendations${qs ? `?${qs}` : ''}`);
+  },
+
+  listExternalSourcingRecords: (params: {
+    orderId?: string;
+    productId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+  } = {}) => {
+    const sp = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') sp.set(k, String(v));
+    });
+    const qs = sp.toString();
+    return apiRequest<ExternalSourcingRecord[]>(`/api/external-sourcing${qs ? `?${qs}` : ''}`);
+  },
+
+  updateExternalSourcingCost: (
+    recordId: string,
+    patch: {
+      supplierName?: string | null;
+      unitCost?: number | null;
+      totalSourcingCost?: number | null;
+      dateSecured?: string;
+      notes?: string | null;
+    }
+  ) =>
+    apiRequest<ExternalSourcingRecord>(`/api/external-sourcing/${encodeURIComponent(recordId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  getUnifiedReport: (
+    reportType: UnifiedReportType,
+    filters: BiFilterParams & {
+      repeatFilter?: CustomerRepeatFilter;
+      dormancyDays?: number;
+      search?: string;
+    } = {}
+  ) => {
+    const sp = new URLSearchParams();
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') sp.set(k, String(v));
+    });
+    const qs = sp.toString();
+    return apiRequest<UnifiedReportClientPayload>(
+      `/api/reports/${encodeURIComponent(reportType)}${qs ? `?${qs}` : ''}`
+    );
+  },
+
+  downloadUnifiedReportExcel: async (
+    reportType: UnifiedReportType,
+    filters: BiFilterParams & {
+      repeatFilter?: CustomerRepeatFilter;
+      dormancyDays?: number;
+      search?: string;
+    } = {}
+  ) => {
+    const token = await getInMemoryIdToken();
+    if (!token) throw new ApiRequestError('يرجى تسجيل الدخول أولاً.', 401);
+    const sp = new URLSearchParams();
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') sp.set(k, String(v));
+    });
+    const qs = sp.toString();
+    const res = await fetch(
+      `/api/reports/${encodeURIComponent(reportType)}/export.xlsx${qs ? `?${qs}` : ''}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiRequestError(err.error || 'فشل تصدير ملف Excel.', res.status);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `KimaScent-${reportType}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+
+  previewBulkProducts: (payload: Record<string, unknown>) =>
+    apiRequest<BulkPreviewResult>('/api/bulk/products/preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  executeBulkProducts: (payload: Record<string, unknown>) =>
+    apiRequest<BulkExecuteResult>('/api/bulk/products/execute', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  previewBulkInventory: (payload: Record<string, unknown>) =>
+    apiRequest<BulkPreviewResult>('/api/bulk/inventory/preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  executeBulkInventory: (payload: Record<string, unknown>) =>
+    apiRequest<BulkExecuteResult>('/api/bulk/inventory/execute', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  previewBulkCustomers: (payload: Record<string, unknown>) =>
+    apiRequest<BulkPreviewResult>('/api/bulk/customers/preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  executeBulkCustomers: (payload: Record<string, unknown>) =>
+    apiRequest<BulkExecuteResult>('/api/bulk/customers/execute', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  previewBulkOrders: (payload: Record<string, unknown>) =>
+    apiRequest<BulkPreviewResult>('/api/bulk/orders/preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  executeBulkOrders: (payload: Record<string, unknown>) =>
+    apiRequest<BulkExecuteResult>('/api/bulk/orders/execute', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };
 

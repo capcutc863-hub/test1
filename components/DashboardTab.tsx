@@ -2,16 +2,20 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { 
   TrendingUp, ShoppingCart, Package, Users, Award, 
   AlertCircle, CheckCircle2, Clock, ArrowUpRight, DollarSign, 
-  Sparkles, Layers
+  Sparkles, Layers, BarChart3
 } from 'lucide-react';
-import { Order, OrdersQueryStats, Product, SalesRep, User, Customer, SystemGeneralSettings } from '../types';
+import { Order, OrdersQueryStats, Product, ProductCategory, SalesRep, User, Customer, SystemGeneralSettings } from '../types';
 import { apiClient } from '../src/lib/api';
+import { DEFAULT_CATEGORIES } from '../src/lib/commission-utils';
 import { getSalesOrderDisplayState, type SalesOrderDisplayState } from '../src/lib/date-utils';
 import { UnifiedDateFilterBar, type DateFilterValue } from './UnifiedDateFilterBar';
+import { OwnerBIDashboard } from './OwnerBIDashboard';
+import { SalesAnalyticsPanel } from './SalesAnalyticsPanel';
 
 interface DashboardTabProps {
   orders: Order[];
   products: Product[];
+  categories?: ProductCategory[];
   salesReps: SalesRep[];
   customers: Customer[];
   generalSettings?: SystemGeneralSettings;
@@ -28,6 +32,7 @@ interface DashboardTabProps {
       | 'delivered-orders'
       | 'inventory'
       | 'customers'
+      | 'reports'
       | 'admin-users'
       | 'owner-console'
   ) => void;
@@ -48,6 +53,7 @@ const RECENT_BADGE_CLASS: Record<SalesOrderDisplayState['badgeVariant'], string>
 export const DashboardTab: React.FC<DashboardTabProps> = ({
   orders,
   products,
+  categories = DEFAULT_CATEGORIES,
   salesReps,
   customers,
   generalSettings,
@@ -56,6 +62,7 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
   onSelectOrder,
   onNavigateTab
 }) => {
+  const [ownerViewMode, setOwnerViewMode] = useState<'bi' | 'classic'>('bi');
   const [dateFilter, setDateFilter] = useState<DateFilterValue>({
     preset: 'all',
     dateType: 'createdAt',
@@ -171,8 +178,83 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
       p.stock < ((p.categoryId || 'cat-oils') === 'cat-oils' ? oilsThreshold : otherThreshold)
   );
 
+  const isOwner = currentUser.role === 'owner';
+
+  if (isOwner && ownerViewMode === 'bi') {
+    return (
+      <div className="space-y-4 sm:space-y-6 animate-in fade-in duration-300">
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-white px-4 py-3 rounded-2xl border border-slate-200/80 shadow-xs">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setOwnerViewMode('bi')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-[#072F5F] text-white text-xs font-black flex items-center gap-1.5 shadow-sm"
+            >
+              <BarChart3 className="w-4 h-4" />
+              اللوحة التنفيذية BI
+            </button>
+            <button
+              type="button"
+              onClick={() => setOwnerViewMode('classic')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black"
+            >
+              المتابعة التشغيلية الكلاسيكية
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigateTab('reports')}
+            className="min-h-[40px] px-4 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-[#0A468C] text-xs font-black flex items-center gap-1.5 border border-blue-200"
+          >
+            <BarChart3 className="w-4 h-4" />
+            مركز التقارير الموحد (12 تقرير)
+          </button>
+        </div>
+
+        <OwnerBIDashboard
+          currentUser={currentUser}
+          products={products}
+          categories={categories}
+          salesReps={salesReps}
+          onNavigateTab={(tab) => onNavigateTab(tab)}
+          onOpenNewOrder={onOpenNewOrder}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5 sm:space-y-8 animate-in fade-in duration-300">
+      {isOwner && (
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-white px-4 py-3 rounded-2xl border border-slate-200/80 shadow-xs">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setOwnerViewMode('bi')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black flex items-center gap-1.5"
+            >
+              <BarChart3 className="w-4 h-4" />
+              اللوحة التنفيذية BI
+            </button>
+            <button
+              type="button"
+              onClick={() => setOwnerViewMode('classic')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-[#072F5F] text-white text-xs font-black shadow-sm"
+            >
+              المتابعة التشغيلية الكلاسيكية
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigateTab('reports')}
+            className="min-h-[40px] px-4 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-[#0A468C] text-xs font-black flex items-center gap-1.5 border border-blue-200"
+          >
+            <BarChart3 className="w-4 h-4" />
+            مركز التقارير الموحد
+          </button>
+        </div>
+      )}
+
       {/* Top Welcome Banner */}
       <div className="bg-gradient-to-r from-[#072F5F] via-[#0A468C] to-[#1565C0] rounded-3xl sm:rounded-[2.5rem] p-5 sm:p-8 md:p-10 text-white shadow-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 sm:gap-6">
         <div className="space-y-2">
@@ -471,6 +553,16 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Role-scoped Sales & Commission Analytics Panel */}
+      <SalesAnalyticsPanel
+        currentUser={currentUser}
+        title={
+          currentUser.role === 'sales'
+            ? 'تحليل مبيعاتي وعمولاتي التفصيلي'
+            : 'تحليل أداء وعمولات فريق السيلز'
+        }
+      />
     </div>
   );
 };

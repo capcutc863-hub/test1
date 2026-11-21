@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { setInMemoryTokenProvider } from '../lib/tokenStore.ts';
 import type { WorkspacePayload } from '../lib/api.ts';
 import type { User } from '../../types.ts';
@@ -35,11 +35,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  const clearInitialWorkspace = () => {
+  const clearInitialWorkspace = useCallback(() => {
     setInitialWorkspace(null);
-  };
+  }, []);
 
-  const completeAuthenticatedSession = (
+  const completeAuthenticatedSession = useCallback((
     token: string,
     user: User,
     workspace: WorkspacePayload | null = null
@@ -49,9 +49,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthToken(token);
     setAuthUser(user);
     setAuthError(null);
-  };
+  }, []);
 
-  const loginWithUsername = async (username: string, password: string): Promise<boolean> => {
+  const loginWithUsername = useCallback(async (username: string, password: string): Promise<boolean> => {
     setAuthError(null);
     setAuthLoading(true);
     try {
@@ -93,31 +93,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setAuthLoading(false);
     }
-  };
+  }, [completeAuthenticatedSession]);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     setAuthToken(null);
     setAuthUser(null);
     setInitialWorkspace(null);
     setAuthError(null);
     setInMemoryTokenProvider(null);
-  };
+  }, []);
+
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      authUser,
+      authToken,
+      initialWorkspace,
+      clearInitialWorkspace,
+      authLoading,
+      authError,
+      loginWithUsername,
+      completeAuthenticatedSession,
+      logout,
+      setAuthUser,
+    }),
+    [
+      authUser,
+      authToken,
+      initialWorkspace,
+      clearInitialWorkspace,
+      authLoading,
+      authError,
+      loginWithUsername,
+      completeAuthenticatedSession,
+      logout,
+    ]
+  );
 
   return (
-    <AuthContext.Provider
-      value={{
-        authUser,
-        authToken,
-        initialWorkspace,
-        clearInitialWorkspace,
-        authLoading,
-        authError,
-        loginWithUsername,
-        completeAuthenticatedSession,
-        logout,
-        setAuthUser,
-      }}
-    >
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
