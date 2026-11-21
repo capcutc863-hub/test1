@@ -31,6 +31,10 @@ import {
 } from '../lib/commission-utils.ts';
 import { normalizeArabicForSearch } from '../lib/product-classifier.ts';
 import {
+  buildProductDescriptionFromImportItem,
+  getCategoryImportHandler,
+} from '../lib/import-categories.ts';
+import {
   DEFAULT_OIL_GRADES,
   decodeUploadedFilename,
   extractPriceListFromPdfBuffer,
@@ -1315,7 +1319,11 @@ export async function remapPriceListImportRecord(params: {
   ]);
   const existingProducts = allProdRows.map(mapProductRow);
   const nextListCategoryId =
-    params.listCategoryId !== undefined ? params.listCategoryId : importRow.listCategoryId;
+    params.listCategoryId === 'auto'
+      ? null
+      : params.listCategoryId !== undefined
+        ? params.listCategoryId
+        : importRow.listCategoryId;
 
   const storedRows = (importRow.rawTableRows as string[][] | undefined) || [];
   const hasExplicitColMapping = Boolean(
@@ -1326,6 +1334,7 @@ export async function remapPriceListImportRecord(params: {
   );
   const storedRowsLookLegacySingleCol =
     storedRows.length === 0 || storedRows.every((r) => !Array.isArray(r) || r.length <= 1);
+  const cleanFileName = decodeUploadedFilename(importRow.fileName);
 
   let remapped;
   if (!storedRowsLookLegacySingleCol || hasExplicitColMapping || !importRow.fileDataBase64) {
@@ -1336,6 +1345,7 @@ export async function remapPriceListImportRecord(params: {
       oilGrades: gradesCatalog,
       listCategoryId: nextListCategoryId,
       columnMapping: params.columnMapping ?? importRow.columnMapping ?? null,
+      fileName: cleanFileName,
     });
   } else {
     const buffer = Buffer.from(importRow.fileDataBase64, 'base64');
@@ -1343,10 +1353,9 @@ export async function remapPriceListImportRecord(params: {
       listCategoryId: nextListCategoryId,
       columnMapping: params.columnMapping ?? importRow.columnMapping ?? null,
       oilGrades: gradesCatalog,
+      fileName: cleanFileName,
     });
   }
-
-  const cleanFileName = decodeUploadedFilename(importRow.fileName);
   const nowIso = new Date().toISOString();
   await db.transaction(async (tx) => {
     await tx
@@ -1464,19 +1473,52 @@ export async function approvePriceListImportRecord(
         .map((p) => [p.code!.trim().toLowerCase(), p])
     );
 
-    const buildVariantKey = (baseName: string, gradeText: string, unitText: string) => {
-      const baseKey = normalizeArabicForSearch(baseName);
-      const gRes = resolveOilGradeMatch(gradeText, gradesCatalog);
-      const gradeKey = normalizeArabicForSearch(gRes.matched ? gRes.canonicalName : gradeText || '');
-      const unitKey = normalizeArabicForSearch(unitText || '');
-      return `${baseKey}||${gradeKey}||${unitKey}`;
+    const catMap = new Map(categories.map((c) => [c.id, c]));
+    const buildVariantKeyForRecord = (params: {
+      categoryObj?: ProductCategory | null;
+      baseName: string;
+      gradeText?: string;
+      unitText?: string;
+      description?: string;
+      attributes?: Record<string, string>;
+    }) => {
+      const handler = getCategoryImportHandler(params.categoryObj);
+      const baseKey = normalizeArabicForSearch(params.baseName);
+      const unitKey = normalizeArabicForSearch(params.unitText || '');
+      if (handler.supportsGrades) {
+        const gRes = resolveOilGradeMatch(params.gradeText || '', gradesCatalog);
+        const gradeKey = normalizeArabicForSearch(gRes.matched ? gRes.canonicalName : params.gradeText || '');
+        return handler.buildVariantKey({ baseProductKey: baseKey, gradeKey, unitKey });
+      }
+      const attrs =
+        params.attributes && Object.keys(params.attributes).length > 0
+          ? params.attributes
+          : handler.extractAttributes({
+              name: params.baseName,
+              description: params.description || '',
+            });
+      return handler.buildVariantKey({
+        baseProductKey: baseKey,
+        gradeKey: '',
+        unitKey,
+        attributes: attrs,
+      });
     };
 
     const byVariantKey = new Map(
-      existingProducts.map((p) => [
-        buildVariantKey(p.baseProductName || p.name, p.grade || '', p.unit || ''),
-        p,
-      ])
+      existingProducts.map((p) => {
+        const pCat = p.categoryId ? catMap.get(p.categoryId) || null : null;
+        return [
+          buildVariantKeyForRecord({
+            categoryObj: pCat,
+            baseName: p.baseProductName || p.name,
+            gradeText: p.grade || '',
+            unitText: p.unit || '',
+            description: p.description || '',
+          }),
+          p,
+        ];
+      })
     );
 
     const batchUnitConfirmed = Boolean(importRow.importConfig?.unitConfig?.confirmedByUser);
@@ -1501,10 +1543,12 @@ export async function approvePriceListImportRecord(
         categories.find((c) => c.name === item.suggestedCategoryName) ||
         (importRow.listCategoryId
           ? categories.find((c) => c.id === importRow.listCategoryId)
-          : undefined);
-      const isOilItem = catObj?.id === 'cat-oils' || catObj?.slug === 'oils';
+          : undefined) ||
+        DEFAULT_CATEGORIES[4];
+      const itemHandler = getCategoryImportHandler(catObj);
+
       if (
-        isOilItem &&
+        itemHandler.requiresUnitConfirmation &&
         !batchUnitConfirmed &&
         !item.originalPriceUnit &&
         (item.warnings || []).some((w) => w.includes('وحدة تسعير الزيت غير مؤكدة'))
@@ -1520,19 +1564,24 @@ export async function approvePriceListImportRecord(
       }
       selectedCodesInBatch.add(codeKey);
 
-      const variantKey = buildVariantKey(
-        item.baseProductName || item.name,
-        item.grade || '',
-        item.unit || ''
-      );
+      const variantKey = buildVariantKeyForRecord({
+        categoryObj: catObj,
+        baseName: item.baseProductName || item.name,
+        gradeText: itemHandler.supportsGrades ? item.grade || '' : '',
+        unitText: item.unit || '',
+        description: item.description || '',
+        attributes: item.attributes,
+      });
       if (selectedVariantKeyInBatch.has(variantKey)) {
+        const descHint = itemHandler.supportsGrades && item.grade ? ` (${item.grade})` : '';
         throw new Error(
-          `الصنف "${item.baseProductName || item.name}"${item.grade ? ` (${item.grade})` : ''} مكرر بنفس الدرجة والوحدة في البنود المحددة للاعتماد.`
+          `الصنف "${item.baseProductName || item.name}"${descHint} مكرر بنفس المواصفات والوحدة في البنود المحددة للاعتماد.`
         );
       }
       selectedVariantKeyInBatch.add(variantKey);
 
       if (
+        !itemHandler.allowSingleBarePriceAsSelling &&
         item.ambiguousSinglePrice !== null &&
         item.singlePriceMeaning === 'unresolved' &&
         item.sellingPrice === null &&
@@ -1554,15 +1603,37 @@ export async function approvePriceListImportRecord(
       const codeKey = code.toLowerCase();
       const baseName = (item.baseProductName || item.name || '').trim();
       const baseKey = item.baseProductKey || normalizeArabicForSearch(baseName);
-      const gradeRes = resolveOilGradeMatch(item.grade || '', gradesCatalog);
-      const finalGradeName = item.grade?.trim()
-        ? gradeRes.matched
-          ? gradeRes.canonicalName
-          : item.grade.trim()
-        : '';
-      const finalGradeId = item.gradeId ?? (gradeRes.matched ? gradeRes.gradeId : null);
 
-      const variantKey = buildVariantKey(baseName, finalGradeName, item.unit || '');
+      const catObj =
+        categories.find((c) => c.id === item.suggestedCategoryId) ||
+        categories.find((c) => c.name === item.suggestedCategoryName) ||
+        (importRow.listCategoryId
+          ? categories.find((c) => c.id === importRow.listCategoryId)
+          : undefined) ||
+        DEFAULT_CATEGORIES[4];
+      const itemHandler = getCategoryImportHandler(catObj);
+
+      const gradeRes = itemHandler.supportsGrades
+        ? resolveOilGradeMatch(item.grade || '', gradesCatalog)
+        : { matched: false, canonicalName: '', gradeId: null };
+      const finalGradeName =
+        itemHandler.supportsGrades && item.grade?.trim()
+          ? gradeRes.matched
+            ? gradeRes.canonicalName
+            : item.grade.trim()
+          : '';
+      const finalGradeId = itemHandler.supportsGrades
+        ? item.gradeId ?? (gradeRes.matched ? gradeRes.gradeId : null)
+        : null;
+
+      const variantKey = buildVariantKeyForRecord({
+        categoryObj: catObj,
+        baseName,
+        gradeText: finalGradeName,
+        unitText: item.unit || '',
+        description: item.description || '',
+        attributes: item.attributes,
+      });
       const matched =
         (item.matchedProductId
           ? existingProducts.find((p) => p.id === item.matchedProductId)
@@ -1573,7 +1644,8 @@ export async function approvePriceListImportRecord(
       const effectiveSelling =
         item.sellingPrice !== null
           ? Number(item.sellingPrice)
-          : item.singlePriceMeaning === 'selling' && item.ambiguousSinglePrice !== null
+          : (item.singlePriceMeaning === 'selling' || itemHandler.allowSingleBarePriceAsSelling) &&
+              item.ambiguousSinglePrice !== null
             ? Number(item.ambiguousSinglePrice)
             : null;
       const effectiveCost =
@@ -1583,13 +1655,11 @@ export async function approvePriceListImportRecord(
             ? Number(item.ambiguousSinglePrice)
             : null;
 
-      const catObj =
-        categories.find((c) => c.id === item.suggestedCategoryId) ||
-        categories.find((c) => c.name === item.suggestedCategoryName) ||
-        (importRow.listCategoryId
-          ? categories.find((c) => c.id === importRow.listCategoryId)
-          : undefined) ||
-        DEFAULT_CATEGORIES[4];
+      const formattedDesc = buildProductDescriptionFromImportItem({
+        description: item.description || '',
+        attributes: item.attributes,
+        categoryProfile: item.categoryProfile || itemHandler.profileKey,
+      });
 
       if (matched) {
         const flags = item.updateFields || {};
@@ -1599,13 +1669,13 @@ export async function approvePriceListImportRecord(
           patch.baseProductName = baseName;
           patch.baseProductKey = baseKey;
         }
-        if (flags.description) patch.description = item.description.trim() || null;
+        if (flags.description) patch.description = formattedDesc || item.description.trim() || null;
         if (flags.category) {
           patch.categoryId = catObj.id;
           patch.categoryName = catObj.name;
         }
         if (flags.unit && item.unit?.trim()) patch.unit = item.unit.trim();
-        if (flags.grade && finalGradeName) {
+        if (itemHandler.supportsGrades && flags.grade && finalGradeName) {
           patch.grade = finalGradeName;
           patch.gradeId = finalGradeId;
         }
@@ -1630,7 +1700,7 @@ export async function approvePriceListImportRecord(
           patch.baseProductName = baseName;
           patch.baseProductKey = baseKey;
         }
-        if (!matched.gradeId && finalGradeId) {
+        if (itemHandler.supportsGrades && !matched.gradeId && finalGradeId) {
           patch.gradeId = finalGradeId;
         }
         // Explicitly NEVER touch stock!
@@ -1648,12 +1718,12 @@ export async function approvePriceListImportRecord(
               productId: matched.id,
               productCode: matched.code || code,
               productName: patch.name || matched.name,
-              grade: patch.grade || matched.grade || finalGradeName || '',
+              grade: itemHandler.supportsGrades ? patch.grade || matched.grade || finalGradeName || '' : '',
               previousSellingPrice: matched.pricePerMg,
               newSellingPrice: patch.pricePerMg ?? matched.pricePerMg,
               previousCostPrice: matched.costPrice ?? null,
               newCostPrice: patch.costPrice !== undefined ? patch.costPrice : matched.costPrice ?? null,
-              unit: patch.unit || matched.unit || 'جرام',
+              unit: patch.unit || matched.unit || catObj.defaultUnit,
               sourceType: 'pdf_import',
               importBatchId: importId,
               actorId: actor.id,
@@ -1676,16 +1746,12 @@ export async function approvePriceListImportRecord(
         );
         const newId = `p-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000)}`;
         const finalUnit = item.unit?.trim() || catObj.defaultUnit;
-        const resolvedGrade =
-          finalGradeName ||
-          (catObj.id === 'cat-oils'
-            ? (gradesCatalog.find((g) => g.isActive)?.name || 'عالي')
-            : '');
-        const resolvedGradeId =
-          finalGradeId ??
-          (!finalGradeName && catObj.id === 'cat-oils'
-            ? (gradesCatalog.find((g) => g.isActive)?.id || null)
-            : null);
+        const resolvedGrade = itemHandler.supportsGrades
+          ? finalGradeName || gradesCatalog.find((g) => g.isActive)?.name || 'عالي'
+          : '';
+        const resolvedGradeId = itemHandler.supportsGrades
+          ? finalGradeId ?? (!finalGradeName ? gradesCatalog.find((g) => g.isActive)?.id || null : null)
+          : null;
 
         const newProdRow: typeof products.$inferInsert = {
           id: newId,
@@ -1693,7 +1759,7 @@ export async function approvePriceListImportRecord(
           name: item.name.trim(),
           categoryId: catObj.id,
           categoryName: catObj.name,
-          description: item.description.trim() || null,
+          description: formattedDesc || item.description.trim() || null,
           unit: finalUnit,
           grade: resolvedGrade,
           gradeId: resolvedGradeId,
@@ -1733,7 +1799,17 @@ export async function approvePriceListImportRecord(
 
         const insertedProd = newProdRow as typeof products.$inferSelect;
         byCode.set(codeKey, insertedProd);
-        byVariantKey.set(buildVariantKey(baseName, resolvedGrade, finalUnit), insertedProd);
+        byVariantKey.set(
+          buildVariantKeyForRecord({
+            categoryObj: catObj,
+            baseName,
+            gradeText: resolvedGrade,
+            unitText: finalUnit,
+            description: newProdRow.description || '',
+            attributes: item.attributes,
+          }),
+          insertedProd
+        );
         createdCount += 1;
       }
     }

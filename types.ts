@@ -575,6 +575,7 @@ export interface CommissionSettingLog {
 export type PriceListMatchStatus = 'new' | 'matched' | 'duplicate_in_file' | 'needs_review';
 export type PriceListSinglePriceMeaning = 'selling' | 'cost' | 'unresolved';
 export type PriceListImportActionMode = 'update_and_add' | 'update_only' | 'add_only';
+export type ImportCategoryProfileKey = 'oils' | 'packaging' | 'alcohol' | 'chemicals' | 'other';
 
 export type PriceListColumnRole =
   | 'ignore'
@@ -586,7 +587,12 @@ export type PriceListColumnRole =
   | 'sellingPrice'
   | 'costPrice'
   | 'pricePerKg'
-  | 'pricePerGram';
+  | 'pricePerGram'
+  | 'capacity'
+  | 'shape'
+  | 'packSize'
+  | 'concentration'
+  | 'specs';
 
 export interface PriceListColumnAssignment {
   role: PriceListColumnRole;
@@ -645,6 +651,12 @@ export interface PriceListImportConfig {
     columnIndices: number[];
   }>;
   isMultiGradeTable: boolean;
+  categoryProfile?: ImportCategoryProfileKey;
+  detectedCategoryId?: string | null;
+  detectedCategoryName?: string | null;
+  detectionSource?: 'user_selected' | 'auto_detected';
+  detectionConfidence?: number;
+  detectionReason?: string | null;
 }
 
 export interface PriceListParsedItem {
@@ -657,6 +669,8 @@ export interface PriceListParsedItem {
   baseProductKey?: string;
   grade?: string;
   gradeId?: string | null;
+  categoryProfile?: ImportCategoryProfileKey;
+  attributes?: Record<string, string>;
   description: string;
   suggestedCategoryId: string;
   suggestedCategoryName: string;

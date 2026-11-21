@@ -27,6 +27,10 @@ import {
 } from '../types';
 import { PRODUCT_UNIT_OPTIONS } from '../src/lib/commission-utils';
 import { apiClient, ApiRequestError, getOwnerStepUpToken } from '../src/lib/api';
+import {
+  findCategoryForProfile,
+  getCategoryImportHandler,
+} from '../src/lib/import-categories';
 
 interface PdfPriceImportModalProps {
   categories: ProductCategory[];
@@ -51,7 +55,7 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
 }) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [listCategoryId, setListCategoryId] = useState<string>(
-    initialImport?.listCategoryId || ''
+    initialImport?.listCategoryId || 'auto'
   );
   const [uploadOilUnit, setUploadOilUnit] = useState<'auto' | 'كيلوجرام' | 'جرام'>('auto');
 
@@ -182,10 +186,6 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
 
   const handleUploadPdf = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!listCategoryId) {
-      setErrorMsg('يرجى تحديد تصنيف قائمة الأسعار (زيوت عطرية / عبوات / كحول...) قبل الرفع والتحليل.');
-      return;
-    }
     if (!selectedFile) {
       setErrorMsg('يرجى اختيار ملف PDF لقائمة الأسعار أولاً.');
       return;
@@ -194,7 +194,8 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
     setErrorMsg(null);
     setSuccessMsg(null);
     try {
-      const isOilCat = listCategoryId === 'cat-oils';
+      const targetCategory = listCategoryId || 'auto';
+      const isOilCat = targetCategory === 'cat-oils';
       const initialColumnMapping: PriceListColumnMapping | null =
         isOilCat && uploadOilUnit !== 'auto'
           ? {
@@ -207,7 +208,7 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
             }
           : null;
       const record = await apiClient.importPriceListPdf(selectedFile, {
-        listCategoryId,
+        listCategoryId: targetCategory,
         columnMapping: initialColumnMapping,
       });
       openBatchForReview(record);
@@ -219,18 +220,23 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
     }
   };
 
-  const handleRemapBatch = async (overrideMapping?: PriceListColumnMapping) => {
+  const handleRemapBatch = async (
+    overrideMapping?: PriceListColumnMapping,
+    overrideCategoryId?: string
+  ) => {
     if (!activeBatch) return;
     setIsRemapping(true);
     setErrorMsg(null);
     setSuccessMsg(null);
     try {
+      const targetCategoryId =
+        overrideCategoryId ?? (remapCategoryId || activeBatch.listCategoryId || 'auto');
       const updated = await apiClient.remapPriceListImport(activeBatch.id, {
-        listCategoryId: remapCategoryId || activeBatch.listCategoryId || undefined,
+        listCategoryId: targetCategoryId,
         columnMapping: overrideMapping || mappingDraft,
       });
       openBatchForReview(updated);
-      setSuccessMsg('تمت إعادة تحليل القائمة وتحديث الأسعار والدرجات بنجاح.');
+      setSuccessMsg('تمت إعادة تحليل القائمة وتحديث البيانات بنجاح حسب معالج الفئة.');
       await loadHistory();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'تعذر إعادة استخراج وتطبيق التعيين.');
@@ -296,9 +302,23 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
       i.singlePriceMeaning === 'unresolved'
   ).length;
 
-  const isOilBatch =
-    activeBatch?.listCategoryId === 'cat-oils' ||
-    editableItems.some((i) => i.suggestedCategoryId === 'cat-oils');
+  const activeCatObj = useMemo(() => {
+    if (!activeBatch) return undefined;
+    return (
+      categories.find((c) => c.id === activeBatch.listCategoryId) ||
+      (activeBatch.importConfig?.categoryProfile
+        ? findCategoryForProfile(activeBatch.importConfig.categoryProfile, categories)
+        : undefined)
+    );
+  }, [activeBatch, categories]);
+
+  const activeHandler = useMemo(() => {
+    return getCategoryImportHandler(
+      activeBatch?.importConfig?.categoryProfile || activeCatObj
+    );
+  }, [activeBatch?.importConfig?.categoryProfile, activeCatObj]);
+
+  const isOilBatch = activeHandler.supportsGrades;
   const unitConfig = activeBatch?.importConfig?.unitConfig ?? null;
   const counts = activeBatch?.importConfig?.counts ?? null;
   const isLegacyBatchExtract = Boolean(
@@ -317,6 +337,36 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
           !i.originalPriceUnit
       )
   );
+  const missingCodesCount = useMemo(
+    () => editableItems.filter((i) => !i.code.trim()).length,
+    [editableItems]
+  );
+
+  const handleGenerateMissingCodes = () => {
+    const usedCodes = new Set(
+      editableItems.map((i) => i.code.trim().toUpperCase()).filter(Boolean)
+    );
+    let seq = 1;
+    const prefix = activeHandler.suggestedCodePrefix || 'ITM';
+    setEditableItems((prev) =>
+      prev.map((item) => {
+        if (item.code.trim()) return item;
+        let candidate = `${prefix}-${String(seq).padStart(3, '0')}`;
+        while (usedCodes.has(candidate.toUpperCase())) {
+          seq += 1;
+          candidate = `${prefix}-${String(seq).padStart(3, '0')}`;
+        }
+        usedCodes.add(candidate.toUpperCase());
+        seq += 1;
+        return {
+          ...item,
+          code: candidate,
+          warnings: item.warnings.filter((w) => !w.includes('كود')),
+        };
+      })
+    );
+    setSuccessMsg(`تم توليد أكواد مؤقتة ببادئة ${prefix} للأصناف التي بدون كود.`);
+  };
 
   const uniqueBaseCount = useMemo(() => {
     const keys = new Set(
@@ -583,14 +633,14 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                     اختر ملف قائمة الأسعار PDF للتحليل والمراجعة
                   </h3>
                   <p className="text-xs font-bold text-slate-500">
-                    يدعم جداول الزيوت متعددة الدرجات (عالي / وسط / تجاري / مخصص) واستخراج سعر البيع وسعر الشراء/التكلفة بدقة
+                    يتعرف النظام تلقائياً على فئة الملف أولاً ثم يطبّق معالجاً متخصصاً لكل فئة (زيوت متعددة الدرجات، فوارغ وعبوات، كحول، كيماويات ومستلزمات)
                   </p>
                 </div>
 
                 <div className="max-w-2xl mx-auto grid grid-cols-1 sm:grid-cols-2 gap-3 text-right">
                   <div className="space-y-1.5">
                     <label className="block text-xs font-black text-[#072F5F]">
-                      تصنيف هذه القائمة (إلزامي قبل التحليل) *
+                      فئة قائمة الأسعار (تلقائي أو اختيار يدوي)
                     </label>
                     <select
                       value={listCategoryId}
@@ -600,7 +650,9 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                       }}
                       className="w-full min-h-[44px] px-3.5 py-2 bg-white border border-blue-200 rounded-2xl font-black text-xs sm:text-sm text-slate-900 outline-none focus:border-[#0A468C]"
                     >
-                      <option value="">— اختر تصنيف منتجات القائمة —</option>
+                      <option value="auto">
+                        التعرف التلقائي على فئة الملف أولاً (Auto-Detect)
+                      </option>
                       {categories
                         .filter((c) => c.isActive !== false)
                         .map((cat) => (
@@ -628,10 +680,21 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                         <option value="جرام">أسعار الجرام مباشرة (بدون قسمة)</option>
                       </select>
                     </div>
+                  ) : listCategoryId === 'auto' ? (
+                    <div className="flex items-end">
+                      <p className="text-[11px] font-bold text-[#072F5F] bg-blue-50/70 border border-blue-200 rounded-2xl px-3.5 py-2.5 w-full">
+                        سيتم فحص اسم الملف والعناوين والأعمدة تلقائياً لاختيار المعالج المناسب (الزيوت، الفوارغ والعبوات، الكحول، الكيماويات).
+                      </p>
+                    </div>
                   ) : (
                     <div className="flex items-end">
-                      <p className="text-[11px] font-bold text-slate-500 bg-white border border-slate-200 rounded-2xl px-3.5 py-2.5 w-full">
-                        تحافظ الفوارغ والعبوات والكحول والكيماويات على وحداتها وأسعارها الأصلية دون قسمة على 1000.
+                      <p className="text-[11px] font-bold text-slate-600 bg-white border border-slate-200 rounded-2xl px-3.5 py-2.5 w-full">
+                        {
+                          getCategoryImportHandler(
+                            categories.find((c) => c.id === listCategoryId)
+                          ).processorTitleAr
+                        }{' '}
+                        — تحافظ الأسعار والوحدات على قيمتها الأصلية دون قسمة على 1000.
                       </p>
                     </div>
                   )}
@@ -658,7 +721,7 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                   />
                   <button
                     type="submit"
-                    disabled={isUploading || !selectedFile || !listCategoryId}
+                    disabled={isUploading || !selectedFile}
                     className="min-h-[48px] px-6 py-3 bg-[#0A468C] hover:bg-[#072F5F] text-white rounded-2xl font-black text-sm flex items-center gap-2 shadow-md disabled:opacity-50 shrink-0"
                   >
                     {isUploading ? (
@@ -671,7 +734,8 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                 </div>
               </form>
 
-              {/* Extensible Oil Grades Management Bar */}
+              {/* Extensible Oil Grades Management Bar (only relevant for Auto or Oils) */}
+              {(listCategoryId === 'auto' || listCategoryId === 'cat-oils') && (
               <div className="bg-white border border-slate-200 rounded-3xl p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -751,6 +815,7 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                   </div>
                 )}
               </div>
+              )}
 
               {/* Import History (with Single & Multi-Select Delete for Owner) */}
               <div className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-5 space-y-3">
@@ -987,6 +1052,69 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                 </div>
               </div>
 
+              {/* Category Processor Banner (Auto-Detection + Quick Switch + Non-Oil Code Helper) */}
+              <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs">
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-black text-[#072F5F]">{activeHandler.processorTitleAr}</span>
+                    {activeBatch.importConfig?.detectionSource === 'auto_detected' ? (
+                      <span className="px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-900 font-black text-[10px]">
+                        تعرّف تلقائي · ثقة {activeBatch.importConfig.detectionConfidence ?? 0}%
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-lg bg-slate-200 text-slate-800 font-black text-[10px]">
+                        محددة يدوياً
+                      </span>
+                    )}
+                  </div>
+                  {activeBatch.importConfig?.detectionReason && (
+                    <p className="text-[11px] font-bold text-slate-600">
+                      {activeBatch.importConfig.detectionReason}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {activeBatch.status === 'pending_review' && (
+                    <>
+                      <span className="font-bold text-slate-600">تبديل المعالج:</span>
+                      <select
+                        disabled={isRemapping}
+                        value={activeBatch.listCategoryId || activeCatObj?.id || 'cat-other'}
+                        onChange={(e) => {
+                          const nextCatId = e.target.value;
+                          setRemapCategoryId(nextCatId);
+                          void handleRemapBatch(
+                            { hasHeaderRow: true, columns: {} },
+                            nextCatId
+                          );
+                        }}
+                        className="min-h-[36px] px-2.5 py-1 bg-white border border-indigo-200 rounded-xl font-black text-xs text-slate-900"
+                      >
+                        {categories
+                          .filter((c) => c.isActive !== false)
+                          .map((cat) => (
+                            <option key={cat.id} value={cat.id}>
+                              {cat.name}
+                            </option>
+                          ))}
+                      </select>
+                    </>
+                  )}
+                  {!isOilBatch &&
+                    activeBatch.status === 'pending_review' &&
+                    missingCodesCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleGenerateMissingCodes}
+                        className="min-h-[36px] px-3 py-1 bg-white border border-indigo-300 hover:bg-indigo-100 text-[#072F5F] rounded-xl font-black text-xs"
+                      >
+                        توليد أكواد للمفقود ({missingCodesCount})
+                      </button>
+                    )}
+                </div>
+              </div>
+
               {/* Transparent Counts & Diagnostics Strip */}
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 text-center text-[11px]">
                 <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-2">
@@ -997,7 +1125,9 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                   </div>
                 </div>
                 <div className="bg-indigo-50/70 border border-indigo-200 rounded-xl p-2">
-                  <div className="font-bold text-slate-600">الأكواد والدرجات</div>
+                  <div className="font-bold text-slate-600">
+                    {isOilBatch ? 'الأكواد والدرجات' : 'الأصناف المستخرجة'}
+                  </div>
                   <div className="font-black text-sm text-indigo-950 tabular-nums">
                     {editableItems.length}
                   </div>
@@ -1118,6 +1248,11 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                     ['pricePerKg', 'سعر الكيلو (زيوت)'],
                     ['pricePerGram', 'سعر الجرام (زيوت)'],
                     ['unit', 'الوحدة'],
+                    ['capacity', 'السعة / الحجم'],
+                    ['shape', 'الشكل / الغلق / اللون'],
+                    ['packSize', 'الشد / التعبئة'],
+                    ['concentration', 'التركيز % (كحول)'],
+                    ['specs', 'المواصفات / المادة الفعالة'],
                     ['description', 'الوصف / الدرجة'],
                   ];
                   return (
@@ -1230,7 +1365,11 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                       type="text"
                       value={reviewSearch}
                       onChange={(e) => setReviewSearch(e.target.value)}
-                      placeholder="بحث باسم الصنف أو الكود أو الدرجة..."
+                      placeholder={
+                        isOilBatch
+                          ? 'بحث باسم الصنف أو الكود أو الدرجة...'
+                          : 'بحث باسم الصنف أو الكود أو المواصفات...'
+                      }
                       className="w-full min-h-[38px] pr-9 pl-3 py-1.5 bg-white border border-slate-200 rounded-xl font-bold text-xs"
                     />
                   </div>
@@ -1292,9 +1431,14 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                             <span className="font-black text-sm text-slate-900">
                               {group.baseProductName}
                             </span>
-                            <span className="px-2 py-0.5 rounded-lg bg-blue-100 text-[#072F5F] font-black text-[11px]">
-                              {group.items.length} {group.items.length > 1 ? 'درجات' : 'درجة'}
-                            </span>
+                            {(isOilBatch || group.items.length > 1) && (
+                              <span className="px-2 py-0.5 rounded-lg bg-blue-100 text-[#072F5F] font-black text-[11px]">
+                                {group.items.length}{' '}
+                                {group.items.length > 1
+                                  ? activeHandler.variantTermPluralAr
+                                  : activeHandler.variantTermSingularAr}
+                              </span>
+                            )}
                           </div>
                           <div className="flex flex-wrap gap-1.5">
                             {group.items.map((v) => (
@@ -1306,13 +1450,18 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                                     : 'bg-white border border-slate-200 text-slate-800'
                                 }`}
                               >
-                                {v.grade || 'أساسي'}: {v.code || 'بدون كود'}
+                                {isOilBatch
+                                  ? `${v.grade || 'أساسي'}: ${v.code || 'بدون كود'}`
+                                  : `${activeHandler.buildVariantSummaryLabel({
+                                      unit: v.unit,
+                                      attributes: v.attributes,
+                                    })}: ${v.code || 'بدون كود'}`}
                               </span>
                             ))}
                           </div>
                         </div>
 
-                        {/* Individual Grade Variants under Base Product */}
+                        {/* Individual Variants under Base Product */}
                         <div className="divide-y divide-slate-100">
                           {group.items.map((item) => {
                             const isAmbiguous =
@@ -1348,26 +1497,32 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                                         }
                                         className="w-4 h-4 accent-[#0A468C]"
                                       />
-                                      <span>تضمين ({item.grade || 'أساسي'})</span>
-                                    </label>
-                                    {item.originalPrice !== null && item.originalPrice !== undefined && (
-                                      <span className="px-2.5 py-0.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 font-bold text-[11px] tabular-nums">
-                                        الأصل ({item.originalPriceUnit || 'كيلوجرام'}): بيع{' '}
-                                        {item.originalPrice.toLocaleString()}
-                                        {item.originalCostPrice !== null &&
-                                        item.originalCostPrice !== undefined
-                                          ? ` · شراء ${item.originalCostPrice.toLocaleString()}`
-                                          : ''}{' '}
-                                        ← النظام ({item.unit}): بيع{' '}
-                                        <strong>{item.sellingPrice ?? '—'}</strong>
-                                        {item.costPrice !== null && item.costPrice !== undefined ? (
-                                          <>
-                                            {' '}
-                                            · شراء <strong>{item.costPrice}</strong>
-                                          </>
-                                        ) : null}
+                                      <span>
+                                        {isOilBatch
+                                          ? `تضمين (${item.grade || 'أساسي'})`
+                                          : 'تضمين للاعتماد'}
                                       </span>
-                                    )}
+                                    </label>
+                                    {isOilBatch &&
+                                      item.originalPrice !== null &&
+                                      item.originalPrice !== undefined && (
+                                        <span className="px-2.5 py-0.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 font-bold text-[11px] tabular-nums">
+                                          الأصل ({item.originalPriceUnit || 'كيلوجرام'}): بيع{' '}
+                                          {item.originalPrice.toLocaleString()}
+                                          {item.originalCostPrice !== null &&
+                                          item.originalCostPrice !== undefined
+                                            ? ` · شراء ${item.originalCostPrice.toLocaleString()}`
+                                            : ''}{' '}
+                                          ← النظام ({item.unit}): بيع{' '}
+                                          <strong>{item.sellingPrice ?? '—'}</strong>
+                                          {item.costPrice !== null && item.costPrice !== undefined ? (
+                                            <>
+                                              {' '}
+                                              · شراء <strong>{item.costPrice}</strong>
+                                            </>
+                                          ) : null}
+                                        </span>
+                                      )}
                                   </div>
 
                                   <div className="flex flex-wrap items-center gap-1.5">
@@ -1456,39 +1611,182 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                                     />
                                   </div>
 
-                                  <div>
-                                    <label className="block text-[10px] font-bold text-slate-500 mb-1">
-                                      الدرجة
-                                    </label>
-                                    <select
-                                      disabled={isLocked}
-                                      value={item.grade || ''}
-                                      onChange={(e) => {
-                                        const gObj = oilGrades.find((g) => g.name === e.target.value);
-                                        updateRow(item.rowKey, (p) => ({
-                                          ...p,
-                                          grade: e.target.value,
-                                          gradeId: gObj?.id ?? null,
-                                        }));
-                                      }}
-                                      className="w-full min-h-[36px] px-2 py-1 bg-white border border-slate-200 rounded-xl font-bold text-xs"
-                                    >
-                                      <option value="">بدون درجة</option>
-                                      {oilGrades.map((g) => (
-                                        <option key={g.id} value={g.name}>
-                                          {g.name}
-                                        </option>
-                                      ))}
-                                      {item.grade &&
-                                        !oilGrades.some((g) => g.name === item.grade) && (
-                                          <option value={item.grade}>{item.grade}</option>
-                                        )}
-                                    </select>
-                                  </div>
+                                  {isOilBatch && (
+                                    <div>
+                                      <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                                        الدرجة
+                                      </label>
+                                      <select
+                                        disabled={isLocked}
+                                        value={item.grade || ''}
+                                        onChange={(e) => {
+                                          const gObj = oilGrades.find((g) => g.name === e.target.value);
+                                          updateRow(item.rowKey, (p) => ({
+                                            ...p,
+                                            grade: e.target.value,
+                                            gradeId: gObj?.id ?? null,
+                                          }));
+                                        }}
+                                        className="w-full min-h-[36px] px-2 py-1 bg-white border border-slate-200 rounded-xl font-bold text-xs"
+                                      >
+                                        <option value="">بدون درجة</option>
+                                        {oilGrades.map((g) => (
+                                          <option key={g.id} value={g.name}>
+                                            {g.name}
+                                          </option>
+                                        ))}
+                                        {item.grade &&
+                                          !oilGrades.some((g) => g.name === item.grade) && (
+                                            <option value={item.grade}>{item.grade}</option>
+                                          )}
+                                      </select>
+                                    </div>
+                                  )}
+
+                                  {!isOilBatch && activeHandler.profileKey === 'packaging' && (
+                                    <>
+                                      <div>
+                                        <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                                          السعة (ml)
+                                        </label>
+                                        <input
+                                          type="text"
+                                          disabled={isLocked}
+                                          value={item.attributes?.capacity || ''}
+                                          onChange={(e) =>
+                                            updateRow(item.rowKey, (p) => ({
+                                              ...p,
+                                              attributes: {
+                                                ...(p.attributes || {}),
+                                                capacity: e.target.value,
+                                              },
+                                            }))
+                                          }
+                                          placeholder="مثلاً: 50 مل"
+                                          className="w-full min-h-[36px] px-2.5 py-1 bg-white border border-slate-200 rounded-xl font-bold text-xs"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                                          الشكل / الغلق
+                                        </label>
+                                        <input
+                                          type="text"
+                                          disabled={isLocked}
+                                          value={item.attributes?.shape || ''}
+                                          onChange={(e) =>
+                                            updateRow(item.rowKey, (p) => ({
+                                              ...p,
+                                              attributes: {
+                                                ...(p.attributes || {}),
+                                                shape: e.target.value,
+                                              },
+                                            }))
+                                          }
+                                          placeholder="مثلاً: كبس · كريستال"
+                                          className="w-full min-h-[36px] px-2.5 py-1 bg-white border border-slate-200 rounded-xl font-bold text-xs"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                                          الشد / التعبئة
+                                        </label>
+                                        <input
+                                          type="text"
+                                          disabled={isLocked}
+                                          value={item.attributes?.packSize || ''}
+                                          onChange={(e) =>
+                                            updateRow(item.rowKey, (p) => ({
+                                              ...p,
+                                              attributes: {
+                                                ...(p.attributes || {}),
+                                                packSize: e.target.value,
+                                              },
+                                            }))
+                                          }
+                                          placeholder="مثلاً: 120 قطعة"
+                                          className="w-full min-h-[36px] px-2.5 py-1 bg-white border border-slate-200 rounded-xl font-bold text-xs"
+                                        />
+                                      </div>
+                                    </>
+                                  )}
+
+                                  {!isOilBatch && activeHandler.profileKey === 'alcohol' && (
+                                    <>
+                                      <div>
+                                        <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                                          التركيز %
+                                        </label>
+                                        <input
+                                          type="text"
+                                          disabled={isLocked}
+                                          value={item.attributes?.concentration || ''}
+                                          onChange={(e) =>
+                                            updateRow(item.rowKey, (p) => ({
+                                              ...p,
+                                              attributes: {
+                                                ...(p.attributes || {}),
+                                                concentration: e.target.value,
+                                              },
+                                            }))
+                                          }
+                                          placeholder="96%"
+                                          className="w-full min-h-[36px] px-2.5 py-1 bg-white border border-slate-200 rounded-xl font-bold text-xs"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                                          حجم العبوة/الجركن
+                                        </label>
+                                        <input
+                                          type="text"
+                                          disabled={isLocked}
+                                          value={item.attributes?.containerSize || ''}
+                                          onChange={(e) =>
+                                            updateRow(item.rowKey, (p) => ({
+                                              ...p,
+                                              attributes: {
+                                                ...(p.attributes || {}),
+                                                containerSize: e.target.value,
+                                              },
+                                            }))
+                                          }
+                                          placeholder="20 لتر"
+                                          className="w-full min-h-[36px] px-2.5 py-1 bg-white border border-slate-200 rounded-xl font-bold text-xs"
+                                        />
+                                      </div>
+                                    </>
+                                  )}
+
+                                  {!isOilBatch &&
+                                    activeHandler.profileKey !== 'packaging' &&
+                                    activeHandler.profileKey !== 'alcohol' && (
+                                      <div>
+                                        <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                                          المواصفات / المادة الفعالة
+                                        </label>
+                                        <input
+                                          type="text"
+                                          disabled={isLocked}
+                                          value={item.attributes?.specs || ''}
+                                          onChange={(e) =>
+                                            updateRow(item.rowKey, (p) => ({
+                                              ...p,
+                                              attributes: {
+                                                ...(p.attributes || {}),
+                                                specs: e.target.value,
+                                              },
+                                            }))
+                                          }
+                                          placeholder="مواصفات أو تعبئة"
+                                          className="w-full min-h-[36px] px-2.5 py-1 bg-white border border-slate-200 rounded-xl font-bold text-xs"
+                                        />
+                                      </div>
+                                    )}
 
                                   <div>
                                     <label className="block text-[10px] font-bold text-slate-500 mb-1">
-                                      المنتج الأساسي
+                                      {isOilBatch ? 'المنتج الأساسي' : 'اسم الصنف'}
                                     </label>
                                     <input
                                       type="text"
@@ -1617,7 +1915,7 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                                       {(
                                         [
                                           ['name', 'تحديث الاسم'],
-                                          ['grade', 'تحديث الدرجة'],
+                                          ...(isOilBatch ? [['grade', 'تحديث الدرجة'] as const] : []),
                                           ['category', 'تحديث التصنيف'],
                                           ['unit', 'تحديث الوحدة'],
                                           ['sellingPrice', 'تحديث سعر البيع'],
@@ -1694,7 +1992,9 @@ export const PdfPriceImportModal: React.FC<PdfPriceImportModalProps> = ({
                       ? 'جاري الحفظ...'
                       : needsOilUnitConfirmation
                         ? 'أكد وحدة تسعير الزيوت أعلاه لتفعيل الاعتماد'
-                        : `اعتماد وحفظ (${selectedCount}) درجة/صنف — دون تعديل المخزون`}
+                        : isOilBatch
+                          ? `اعتماد وحفظ (${selectedCount}) درجة/صنف — دون تعديل المخزون`
+                          : `اعتماد وحفظ (${selectedCount}) ${activeHandler.variantTermPluralAr} في الكتالوج — دون تعديل المخزون`}
                   </button>
                   <button
                     type="button"

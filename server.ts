@@ -1652,7 +1652,9 @@ app.post(
       }
 
       const rawListCatId =
-        typeof req.body?.listCategoryId === 'string' && req.body.listCategoryId.trim()
+        typeof req.body?.listCategoryId === 'string' &&
+        req.body.listCategoryId.trim() &&
+        req.body.listCategoryId.trim() !== 'auto'
           ? req.body.listCategoryId.trim()
           : null;
 
@@ -1683,6 +1685,7 @@ app.post(
         listCategoryId: rawListCatId,
         columnMapping: parsedColumnMapping,
         oilGrades: gradesCatalog,
+        fileName,
       });
       const savedImport = await createPriceListImportRecord({
         fileName,
